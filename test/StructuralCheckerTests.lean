@@ -127,4 +127,12 @@ def listRange1 (n : Nat) : List Nat := List.range' 1 n
 def finsetRange0 (n : Nat) : Finset Nat := Finset.range n
 #check_atp finsetRange0
 
+-- ============================================================
+-- Axiom Checker: Classical.* Namespace
+-- ============================================================
+
+/-- User axiom in Classical namespace should still be flagged -/
+axiom Classical.fake : 1 = 2
+#check_atp Classical.fake
+
 end StructuralChecker

@@ -136,4 +136,20 @@ def intFdivUnguarded (a b : Int) : Int := Int.fdiv a b
 def intEdivUnguarded (a b : Int) : Int := Int.ediv a b
 #check_atp intEdivUnguarded
 
+-- ============================================================
+-- Division by Literal Zero
+-- ============================================================
+
+/-- Division by literal zero should be flagged as ERROR -/
+def div_by_zero_nat (a : Nat) : Nat := a / 0
+#check_atp div_by_zero_nat
+
+-- ============================================================
+-- Nat.pred (documents current gap)
+-- ============================================================
+
+/-- Nat.pred without guard. Current linter does NOT check Nat.pred. -/
+def natPredUnguarded (n : Nat) : Nat := Nat.pred n
+#check_atp natPredUnguarded
+
 end ArithmeticSemantics

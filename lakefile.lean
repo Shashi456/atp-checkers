@@ -12,11 +12,11 @@ lean_lib «AtpLinter» where
 
 lean_lib «AtpLinterTest» where
   srcDir := "test"
-  roots := #[`AllTests]
+  globs := #[.one `AllTests, .one `ArithmeticSemanticsTests, .one `GuardProvingTests, .one `PrefixScopeTests, .one `StructuralCheckerTests, .one `AdvancedCheckerTests, .one `IntegrationTests]
 
 lean_lib «AtpLinterDemo» where
   srcDir := "test"
-  roots := #[`DemoTests]
+  globs := #[.one `DemoTests, .one `Examples, .one `SimpleExamples, .one `RealProblem]
 
 @[default_target]
 lean_exe «atp-checkers» where

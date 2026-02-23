@@ -110,4 +110,20 @@ def negGuardInt (a b : Int) (h : b < 0) : Int := a / b
 def natMinusOneUnguarded (n : Nat) : Nat := n - 1
 #check_atp natMinusOneUnguarded
 
+-- ============================================================
+-- Guard Proving: Omega and Chained Inequalities
+-- ============================================================
+
+/-- Subtraction guarded by omega-provable hypothesis -/
+theorem subGuardedOmega2 (a b : Nat) (h : a ≥ b) : a - b + b = a := by omega
+#check_atp subGuardedOmega2
+
+/-- Int.toNat guarded by h : x ≥ 2, omega should prove 0 ≤ x -/
+theorem toNatGuardedFromGeTwo (x : Int) (h : x ≥ 2) : x.toNat ≥ 0 := by omega
+#check_atp toNatGuardedFromGeTwo
+
+/-- Chained inequalities: a ≥ c, c ≥ b ⟹ a ≥ b (omega should handle) -/
+theorem chainedIneq (a b c : Nat) (h1 : a ≥ c) (h2 : c ≥ b) : a - b ≤ a := by omega
+#check_atp chainedIneq
+
 end GuardProving

@@ -7,7 +7,7 @@
 import AtpLinter
 
 def main : IO Unit := do
-  IO.println s!"ATP Checkers v{AtpLinter.linterVersion}"
+  IO.println "ATP Checkers"
   IO.println "Use #check_atp <declaration> in your Lean file to analyze declarations"
   IO.println ""
   IO.println "Detects:"

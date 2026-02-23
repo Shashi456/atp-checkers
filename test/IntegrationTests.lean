@@ -108,4 +108,42 @@ theorem combined_vacuous_div : ∀ x : Fin 0, ∀ n : Nat, n / 0 = 0 := by
   exact Fin.elim0 x
 #check_atp combined_vacuous_div
 
+-- ============================================================
+-- Dedup Finding Count Assertions
+-- ============================================================
+
+/-- Assert that #check_atp produces exactly `expected` findings for `name` -/
+syntax (name := assertFindingCount) "#assert_finding_count " ident num : command
+
+open Lean Elab Command Meta in
+@[command_elab assertFindingCount]
+def elabAssertFindingCount : CommandElab := fun stx => do
+  let id := stx[1]
+  let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+  let some expected := stx[2].isNatLit?
+    | throwError "Expected a number literal"
+  let findings ← liftTermElabM do
+    let analysis ← AtpLinter.analyzeDecl name
+    AtpLinter.toFindings analysis
+  if findings.size != expected then
+    throwError "Expected {expected} finding(s) for {name}, got {findings.size}"
+
+/-- HDiv.hDiv and Nat.div fire on the same expression.
+    Dedup merges into 1 division finding + 1 truncation finding = 2 total.
+    With h : b = 0, unsafety proof upgrades division to proven. -/
+def dedupBugDiv (a b : Nat) (h : b = 0) : Nat := a / b
+#check_atp dedupBugDiv
+#assert_finding_count dedupBugDiv 2
+
+/-- HMod.hMod and Nat.mod fire on the same expression.
+    Dedup merges into exactly 1 modulo finding. -/
+def dedupBugMod (a b : Nat) (h : b = 0) : Nat := a % b
+#check_atp dedupBugMod
+#assert_finding_count dedupBugMod 1
+
+/-- Division with no unsafety evidence — 1 division + 1 truncation = 2 findings. -/
+def dedupBugDivMaybe (a b : Nat) : Nat := a / b
+#check_atp dedupBugDivMaybe
+#assert_finding_count dedupBugDivMaybe 2
+
 end Integration
