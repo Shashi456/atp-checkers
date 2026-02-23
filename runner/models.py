@@ -48,15 +48,11 @@ class Finding:
 @dataclass
 class Provenance:
     """Provenance information for reproducibility."""
-    runner_version: str
-    linter_version: str
     lean_toolchain: str
     timestamp: str
 
     def to_dict(self) -> dict:
         return {
-            "runner_version": self.runner_version,
-            "linter_version": self.linter_version,
             "lean_toolchain": self.lean_toolchain,
             "timestamp": self.timestamp,
         }

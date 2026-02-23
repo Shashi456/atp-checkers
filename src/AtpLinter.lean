@@ -436,10 +436,6 @@ def emitFinding (f : LintFinding) : IO Unit := do
 def emitDone (declCount : Nat) (findingCount : Nat) : IO Unit := do
   IO.println s!"ATP_DONE:\{\"declarations\":{declCount},\"findings\":{findingCount}}"
 
-/-- Emit version for provenance -/
-def emitVersion : IO Unit := do
-  IO.println s!"ATP_VERSION:{linterVersion}"
-
 /-- Command to run the linter -/
 syntax (name := checkAtp) "#check_atp " ident : command
 
@@ -502,9 +498,6 @@ syntax (name := checkAtpAll) "#check_atp_all" : command
 
 @[command_elab checkAtpAll]
 def elabCheckAtpAll : CommandElab := fun _ => do
-  -- Emit version first
-  liftCoreM <| emitVersion
-
   let env ← getEnv
   -- Get current module name from the environment's main module
   let currModuleName := env.header.mainModule

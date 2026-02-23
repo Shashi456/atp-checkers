@@ -11,9 +11,6 @@ open Lean Meta
 
 namespace AtpLinter
 
-/-- Linter version - single source of truth for provenance tracking -/
-def linterVersion : String := "0.4.0"
-
 /-- Categories of errors we detect -/
 inductive ErrorCategory where
   | truncatedSubtraction   -- Nat subtraction without guard

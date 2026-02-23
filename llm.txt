@@ -227,11 +227,25 @@ Writes to a temp file, runs `lake env lean <file>`, parses `ATP_LINT:` / `ATP_DO
   "status": "ok|findings|compile_error|timeout|infra_error",
   "findings": [{"category":"...","confidence":"proven","provedBy":"omega",...}],
   "duration_ms": 1234,
-  "provenance": {"runner_version":"0.1.0","linter_version":"0.4.0","lean_toolchain":"..."}
+  "provenance": {"lean_toolchain":"...","timestamp":"..."}
 }
 ```
 
 **Note:** Problems with `import Mathlib` require a pre-built Mathlib in the workspace. Use `minimal_no_mathlib.jsonl` for self-contained smoke tests.
+
+---
+
+## Change Policy
+
+When editing checker behavior:
+1. Update checker code in `src/AtpLinter/`
+2. Add/adjust tests in `test/`
+3. Validate runner output shape if JSON fields change
+4. Update `README.md` and `datasets/FORMATS.md` if user-facing contracts change
+
+Confidence contract (`confidence`: `proven` | `maybe`, `provedBy`: string or null) should remain stable.
+
+Prompt sets and prompt pipelines live outside this repository.
 
 ---
 

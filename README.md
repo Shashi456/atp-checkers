@@ -124,8 +124,6 @@ Each line of `results.jsonl` is a JSON object:
   "error_message": null,
   "duration_ms": 1823,
   "provenance": {
-    "runner_version": "0.1.0",
-    "linter_version": "0.4.0",
     "lean_toolchain": "leanprover/lean4:v4.24.0",
     "timestamp": "2026-02-23T12:42:44.125493+00:00"
   },
@@ -199,8 +197,7 @@ atp-checkers/
 ├── runner/                    # Python JSONL batch runner
 ├── datasets/examples/         # Smoke test datasets
 ├── LIMITATIONS.md             # What the linter can and cannot do
-├── llm.txt                    # Detailed implementation reference
-└── AGENTS.md                  # Agent/operator instructions
+└── llm.txt                    # Detailed implementation reference
 ```
 
 ## Building from Source

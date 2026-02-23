@@ -7,7 +7,6 @@ import re
 import sys
 from pathlib import Path
 
-from . import __version__
 from .loader import load_jsonl
 from .executor import run_batch, DEFAULT_TIMEOUT
 from .models import ParseError, LintResult, Provenance
@@ -68,12 +67,7 @@ Examples:
         "--skip-existing",
         action="store_true",
         help="Skip problems already in results.jsonl (for resuming interrupted runs). "
-             "Assumes same toolchain/linter version; use fresh output dir for new runs.",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
+             "Assumes same toolchain; use fresh output dir for new runs.",
     )
 
     args = parser.parse_args()
@@ -124,7 +118,6 @@ Examples:
         import json as json_module
         print(f"Loading existing results from {results_file}...")
         seen_toolchains = set()
-        seen_linter_versions = set()
         with open(results_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -134,25 +127,20 @@ Examples:
                     data = json_module.loads(line)
                     if "problem_id" in data:
                         existing_ids.add(data["problem_id"])
-                    # Track provenance for mismatch detection
                     if "provenance" in data:
                         prov = data["provenance"]
                         if "lean_toolchain" in prov:
                             seen_toolchains.add(prov["lean_toolchain"])
-                        if "linter_version" in prov:
-                            seen_linter_versions.add(prov["linter_version"])
                 except json_module.JSONDecodeError:
-                    pass  # Skip malformed lines in existing results
+                    pass
         print(f"Found {len(existing_ids)} already-processed problems")
 
-        # Warn about provenance mismatches
+        # Warn about toolchain mismatches
         if seen_toolchains and toolchain not in seen_toolchains:
             print(f"Warning: Current toolchain '{toolchain}' differs from existing results: {seen_toolchains}", file=sys.stderr)
             print("         Results may be inconsistent. Consider using a fresh output directory.", file=sys.stderr)
         if len(seen_toolchains) > 1:
             print(f"Warning: Existing results contain mixed toolchains: {seen_toolchains}", file=sys.stderr)
-        if len(seen_linter_versions) > 1:
-            print(f"Warning: Existing results contain mixed linter versions: {seen_linter_versions}", file=sys.stderr)
 
     logs_dir.mkdir(exist_ok=True)
 
@@ -190,8 +178,6 @@ Examples:
     # Skip if resuming - load errors would have been emitted in the original run
     if load_errors and not existing_ids:
         load_provenance = Provenance(
-            runner_version=__version__,
-            linter_version="n/a",
             lean_toolchain=toolchain,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )

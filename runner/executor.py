@@ -12,12 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
-from . import __version__
 from .models import Problem, Finding, LintResult, Provenance
 
 
 # Sentinel prefixes used by the Lean linter
-SENTINEL_VERSION = "ATP_VERSION:"
 SENTINEL_LINT = "ATP_LINT:"
 SENTINEL_DONE = "ATP_DONE"
 
@@ -54,30 +52,26 @@ def wrap_with_linter(lean_code: str) -> str:
 """
 
 
-def parse_lint_output(stdout: str) -> Tuple[Optional[str], list[Finding], list[str]]:
+def parse_lint_output(stdout: str) -> Tuple[list[Finding], list[str]]:
     """
     Parse linter output from stdout.
 
     Returns:
-        (linter_version, findings, parse_errors)
+        (findings, parse_errors)
     """
-    linter_version = None
     findings = []
     parse_errors = []
 
     for line in stdout.splitlines():
-        if line.startswith(SENTINEL_VERSION):
-            linter_version = line[len(SENTINEL_VERSION):].strip()
-        elif line.startswith(SENTINEL_LINT):
+        if line.startswith(SENTINEL_LINT):
             json_str = line[len(SENTINEL_LINT):]
             try:
                 data = json.loads(json_str)
                 findings.append(Finding.from_dict(data))
             except json.JSONDecodeError as e:
-                # Track parse errors instead of silently dropping
                 parse_errors.append(f"Malformed ATP_LINT JSON: {e} in: {json_str[:100]}")
 
-    return linter_version, findings, parse_errors
+    return findings, parse_errors
 
 
 def has_done_sentinel(stdout: str) -> Tuple[bool, Optional[dict]]:
@@ -198,7 +192,7 @@ async def lint_problem(
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
         # Parse linter output
-        linter_version, findings, parse_errors = parse_lint_output(stdout_str)
+        findings, parse_errors = parse_lint_output(stdout_str)
         done, done_meta = has_done_sentinel(stdout_str)
 
         # Check for truncated output by comparing expected vs actual findings count
@@ -225,7 +219,7 @@ async def lint_problem(
                 findings=findings,  # Include any findings we did parse
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(linter_version, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -241,7 +235,7 @@ async def lint_problem(
                 findings=[],
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(linter_version, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
         elif proc.returncode > 0:
@@ -254,7 +248,7 @@ async def lint_problem(
                 findings=[],
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(linter_version, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
         elif not done:
@@ -266,7 +260,7 @@ async def lint_problem(
                 findings=[],
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(linter_version, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
         else:
@@ -277,7 +271,7 @@ async def lint_problem(
                 findings=findings,
                 error_message=None,
                 duration_ms=duration_ms,
-                provenance=_make_provenance(linter_version, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -317,11 +311,9 @@ def _cleanup_problem_artifacts(workspace: Path, problem_id: str):
                 pass
 
 
-def _make_provenance(linter_version: Optional[str], toolchain: str) -> Provenance:
+def _make_provenance(toolchain: str) -> Provenance:
     """Create provenance record."""
     return Provenance(
-        runner_version=__version__,
-        linter_version=linter_version or "unknown",
         lean_toolchain=toolchain,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
