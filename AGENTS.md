@@ -3,12 +3,11 @@
 ## Purpose
 
 This repository provides a Lean semantic-trap linter and a dataset runner.
-Repo identity is `atp-checkers` (v0.1x release cut).
-Lean code namespace is still `AtpLinter`.
+Package name is `atp-checkers`. Lean code namespace is `AtpLinter`.
 
-## Non-Goals for v0.1x
+## Non-Goals
 
-Do not add prompt sets or prompt pipelines in this release branch.
+Prompt sets and prompt pipelines live outside this repository.
 
 ## First Commands
 
