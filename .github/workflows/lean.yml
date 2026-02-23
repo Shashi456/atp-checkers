@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lean-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lean CI
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: true
+          test: |
+            lake build
+            lake build AtpLinterTest

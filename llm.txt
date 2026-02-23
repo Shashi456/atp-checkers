@@ -1,0 +1,243 @@
+# ATP Checkers — Lean 4 Formalization Error Detector
+
+Metaprogramming-based linter detecting "Lean Semantic Traps" — code that compiles
+but silently produces mathematically incorrect results. Uses **semantic guard
+checking** via `assumption` → `omega` → `grind` (SMT-style solver) tactics.
+
+Release identity: `atp-checkers`. Internal Lean namespace: `AtpLinter`.
+
+---
+
+## Project Structure
+
+```
+atp-checkers/
+├── lakefile.lean              # Lake build config (package atp-checkers)
+├── lake-manifest.json         # Dependencies (mathlib v4.24.0)
+├── lean-toolchain             # leanprover/lean4:v4.24.0
+├── Main.lean                  # CLI entry point
+├── src/
+│   ├── AtpLinter.lean         # Main module, #check_atp command, JSON pipeline
+│   └── AtpLinter/
+│       ├── Basic.lean         # Common types (ErrorCategory, Severity, Confidence)
+│       ├── SemanticGuards.lean # Guard/unsafety prover (assumption + omega + grind)
+│       ├── NatSubtraction.lean
+│       ├── DivisionByZero.lean
+│       ├── IntDivTruncation.lean
+│       ├── IntToNat.lean
+│       ├── ListRange.lean
+│       ├── ModuloByZero.lean
+│       ├── AxiomChecker.lean
+│       ├── VacuousCheck.lean
+│       ├── UnusedBinder.lean
+│       ├── Counterexample.lean
+│       ├── CastAfterTruncation.lean
+│       ├── ExponentTruncation.lean
+│       └── AnalyticDomain.lean
+├── test/
+│   ├── AllTests.lean          # Hub: imports all 7 gating test modules
+│   └── ...                    # 7 gating + 3 demo test files
+├── runner/                    # Python JSONL batch execution pipeline
+│   ├── __main__.py
+│   ├── executor.py
+│   ├── loader.py
+│   └── models.py
+└── datasets/
+    └── examples/              # Minimal test datasets
+```
+
+### Build & Test
+
+```bash
+lake build                    # Build linter (36 jobs)
+lake build AtpLinterTest      # Run gating tests
+lake build AtpLinterDemo      # Run demo tests (non-gating)
+
+python3 -m runner datasets/examples/minimal_no_mathlib.jsonl \
+  --workspace . --output out --timeout 60
+```
+
+---
+
+## Checkers (13)
+
+| Checker | File | Detects | Guard Method |
+|---------|------|---------|--------------|
+| Nat Subtraction | `NatSubtraction.lean` | `a - b` on Nat without `b ≤ a` | Semantic (omega → grind) |
+| Division by Zero | `DivisionByZero.lean` | `a / b` without `b ≠ 0` | Semantic (omega → grind) |
+| Int Div Truncation | `IntDivTruncation.lean` | `1/4 = 0` truncation | Literal analysis |
+| Int.toNat | `IntToNat.lean` | `Int.toNat` without `x ≥ 0` | Semantic (omega) |
+| List.range | `ListRange.lean` | 0-indexed ranges | Flagged for review |
+| Modulo by Zero | `ModuloByZero.lean` | `a % b` without `b ≠ 0` | Semantic (omega) |
+| Axiom | `AxiomChecker.lean` | User `axiom` asserting Prop | Declaration type |
+| Vacuous Hyps | `VacuousCheck.lean` | Contradictory hyps / empty domains | Prove `False` (omega → grind) |
+| Unused Binder | `UnusedBinder.lean` | `∀ x, ...` where `x` unused | `hasLooseBVar` |
+| Counterexample | `Counterexample.lean` | Concrete counterexamples | `decide` + enumeration |
+| Cast After Trunc | `CastAfterTruncation.lean` | Cast applied after truncating op | Pattern matching |
+| Exponent Trunc | `ExponentTruncation.lean` | Negative/zero exponent issues | Guard + literal analysis |
+| Analytic Domain | `AnalyticDomain.lean` | `x⁻¹`/sqrt/log without domain guard | Semantic (assumption → grind) |
+
+---
+
+## Confidence Model
+
+Every finding carries `confidence` (`proven`/`maybe`) and optional `provedBy`:
+
+```lean
+inductive Confidence where
+  | proven    -- Constructive proof/witness that the risky behavior occurs
+  | maybe     -- Suspicious pattern, but no proof of actual failure
+
+structure LintFinding where
+  ...
+  confidence : Confidence := .maybe
+  provedBy : Option String := none    -- e.g. "omega", "assumption", "decide", "definitional"
+```
+
+### When `proven` vs `maybe`
+
+| Checker | `proven` | `maybe` |
+|---------|----------|---------|
+| DivisionByZero (literal 0) | `isDefinitelyZero` | — |
+| DivisionByZero (unguarded) | unsafety proves `d = 0` | both proofs fail |
+| NatSubtraction | unsafety proves `a < b` | both proofs fail |
+| ModuloByZero | unsafety proves `d = 0` | both proofs fail |
+| IntToNat | unsafety proves `x < 0` | both proofs fail |
+| IntDivTruncation | both literals → truncates | non-literal operands |
+| Axiom, Vacuous, Counterexample | always proven | — |
+| ExponentTruncation | omega proves negative exp | not proven |
+| AnalyticDomain | unsafety proves violation | both proofs fail |
+| UnusedBinder, ListRange, CastAfterTrunc | — | always (heuristic) |
+
+### Unsafety Proving
+
+When safety guard fails, checkers attempt to prove the **dangerous condition** via `tryProveUnsafety?` (same prover stack: assumption → omega → grind):
+
+| Checker | Unsafety goal |
+|---------|--------------|
+| DivisionByZero | `divisor = 0` |
+| NatSubtraction | `lhs < rhs` |
+| IntToNat | `intExpr < 0` |
+| ModuloByZero | `divisor = 0` |
+| AnalyticDomain | `x = 0` / `x < 0` / `x ≤ 0` |
+
+### JSON Output
+
+```json
+{"category":"Potential Division by Zero","severity":"WARNING","declaration":"myDiv",
+ "message":"a / b has no guard...","confidence":"proven","provedBy":"assumption",
+ "taxonomyCategory":"I.d - Lean Semantic Traps"}
+```
+
+Python `Finding` maps `provedBy` (camelCase) → `proved_by` (snake_case).
+
+---
+
+## Core Module: SemanticGuards.lean
+
+Layered fallback prover: `assumption` → `omega` → `grind`.
+
+### Key Types
+
+```lean
+inductive ProvedBy where
+  | assumption | simp | byContra | omega | positivity | grind
+
+structure LocalCtxSnapshot where
+  lctx : LocalContext
+  insts : LocalInstances
+```
+
+### Key Functions
+
+```lean
+def tryProve? (goal : Expr) (useOmega := true) (useGrind := false) : MetaM (Option ProvedBy)
+def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy)
+def tryProveUnsafety? (goal : Expr) (snap : LocalCtxSnapshot) : MetaM (Option ProvedBy)
+def proveDivisorSafe? (d : Expr) : MetaM (Option ProvedBy)
+def proveNatSubGuard? (a b : Expr) : MetaM (Option ProvedBy)
+def proveIntNonneg? (intExpr : Expr) : MetaM (Option ProvedBy)
+```
+
+### Tactic Strategy
+
+| Domain | Chain | Rationale |
+|--------|-------|-----------|
+| Nat/Int guards | assumption → omega → grind(guard) | omega handles most |
+| Real/field guards | assumption → grind(guard, omega off) | omega can't reason about Real |
+| Vacuity (prove False) | assumption → omega → grind(vacuity) | Maximum power |
+| Unsafety proofs | assumption → omega → grind(guard) | Same stack as guards |
+
+Two grind configs with strict caps: `grindConfigGuard` (tight) and `grindConfigVacuity` (generous).
+
+---
+
+## Implementation Patterns
+
+### Prefix-Context Traversal
+
+All checkers use single-binder recursion for soundness — visit binder type BEFORE introducing later binders:
+
+```lean
+| .forallE n ty body bi =>
+    results := results ++ (← findXxx ty lctx)       -- current context only
+    let bodyResults ← withLocalDecl n bi ty fun fvar => do
+      let lctx' ← getLCtx
+      findXxx (body.instantiate1 fvar) lctx'
+    results := results ++ bodyResults
+```
+
+Why: In `∀ (x : Fin (a / b)) (hb : b ≠ 0), True`, `hb` must NOT be in scope when checking `x`'s type.
+
+### Pre-computed Strings
+
+Pretty-print expressions at discovery time (when binders are in scope). Store as `lhsStr`/`rhsStr`/etc. If you pretty-print after traversal, you get `_fvar.826` instead of names.
+
+### Skip Proof Terms
+
+Only analyze type signatures for Prop declarations. Proof terms are enormous and contain incidental operations.
+
+### Deduplication
+
+All checkers use insertion-order dedup with semantic keys (no `exprHash`):
+- `HDiv.hDiv` and `Nat.div` detections merge correctly
+- Deterministic output order
+- Strongest-evidence-wins on collision
+
+Key per checker: `(operandStr1, operandStr2, guardEvidence.isSome)` — varies slightly by checker.
+
+---
+
+## Runner Pipeline
+
+The Python runner (`runner/`) wraps each problem's `lean_code` with:
+```
+import AtpLinter
+<lean_code>
+#check_atp_all
+```
+
+Writes to a temp file, runs `lake env lean <file>`, parses `ATP_LINT:` / `ATP_DONE:` sentinels from stdout.
+
+**Output schema** (`results.jsonl`):
+```json
+{
+  "problem_id": "...",
+  "source": "...",
+  "status": "ok|findings|compile_error|timeout|infra_error",
+  "findings": [{"category":"...","confidence":"proven","provedBy":"omega",...}],
+  "duration_ms": 1234,
+  "provenance": {"runner_version":"0.1.0","linter_version":"0.4.0","lean_toolchain":"..."}
+}
+```
+
+**Note:** Problems with `import Mathlib` require a pre-built Mathlib in the workspace. Use `minimal_no_mathlib.jsonl` for self-contained smoke tests.
+
+---
+
+## Limitations
+
+1. **Mathlib**: Required as dependency for full benchmark analysis; must be pre-built in workspace
+2. **Grind scope**: Extends to ordered rings/fields (Real) but may need `@[grind]` annotations for some lemmas
+3. **Complex guards**: May miss guards behind definitions or type class instances
+4. **omega off for Real**: omega disabled for Real types; relies on grind for field reasoning

@@ -1,0 +1,19 @@
+# Lean build artifacts
+.lake/
+**/*.olean
+**/*.ilean
+**/*.trace
+
+# Temporary problem files
+_Problem_*.lean
+
+# Runner outputs
+out/
+results/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

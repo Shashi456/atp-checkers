@@ -1,0 +1,2 @@
+{"id":"toy_safe","lean_code":"import Mathlib\n\ndef safeDiv (a : Nat) : Nat := a / 2","natural_language":"Safe by non-zero literal divisor"}
+{"id":"toy_maybe","lean_code":"import Mathlib\n\ndef maybeDiv (a b : Nat) : Nat := a / b","natural_language":"Potential division by zero"}

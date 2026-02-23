@@ -1,0 +1,3 @@
+{"id":"safe_lit","lean_code":"def safeDiv (a : Nat) : Nat := a / 2","natural_language":"Safe: non-zero literal divisor"}
+{"id":"unguarded_div","lean_code":"def maybeDiv (a b : Nat) : Nat := a / b","natural_language":"Unguarded division by zero"}
+{"id":"proven_zero","lean_code":"def zeroDiv (a : Nat) : Nat := a / 0","natural_language":"Literal zero divisor (proven)"}
