@@ -193,7 +193,7 @@ atp-checkers/
 ├── lean-toolchain             # Lean 4 v4.24.0
 ├── Main.lean                  # CLI entry point
 ├── src/AtpLinter/             # 13 checker modules + core infrastructure
-├── test/                      # 7 gating + 3 demo test suites
+├── test/                      # 6 gating + 3 demo test suites
 ├── runner/                    # Python JSONL batch runner
 ├── datasets/examples/         # Smoke test datasets
 ├── LIMITATIONS.md             # What the linter can and cannot do

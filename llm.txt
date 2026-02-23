@@ -35,8 +35,8 @@ atp-checkers/
 │       ├── ExponentTruncation.lean
 │       └── AnalyticDomain.lean
 ├── test/
-│   ├── AllTests.lean          # Hub: imports all 7 gating test modules
-│   └── ...                    # 7 gating + 3 demo test files
+│   ├── AllTests.lean          # Hub: imports all 6 gating test modules
+│   └── ...                    # 6 gating + 3 demo test files
 ├── runner/                    # Python JSONL batch execution pipeline
 │   ├── __main__.py
 │   ├── executor.py
