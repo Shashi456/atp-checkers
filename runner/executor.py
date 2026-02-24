@@ -99,6 +99,7 @@ async def lint_problem(
     problem: Problem,
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
+    row_index: int = 0,
 ) -> LintResult:
     """
     Lint a single problem.
@@ -107,7 +108,8 @@ async def lint_problem(
         workspace: Path to pre-built Lean workspace
         problem: The problem to lint
         toolchain: Lean toolchain string (for provenance)
-        timeout: Timeout in seconds
+        timeout: Timeout per problem in seconds
+        row_index: Unique row index to prevent temp file collisions
 
     Returns:
         LintResult with status and findings
@@ -116,7 +118,8 @@ async def lint_problem(
 
     # Write problem to temp file (sanitize ID for valid Lean module name)
     safe_id = _sanitize_id_for_lean(problem.id)
-    problem_file = workspace / f"_Problem_{safe_id}.lean"
+    file_stem = f"_Problem_{row_index}_{safe_id}"
+    problem_file = workspace / f"{file_stem}.lean"
     try:
         problem_file.write_text(wrap_with_linter(problem.lean_code), encoding="utf-8")
     except (OSError, IOError) as e:
@@ -128,7 +131,7 @@ async def lint_problem(
             findings=[],
             error_message=f"Failed to write problem file: {e}",
             duration_ms=duration_ms,
-            provenance=_make_provenance(None, toolchain),
+            provenance=_make_provenance(toolchain),
             metadata=problem.metadata,
         )
 
@@ -151,7 +154,7 @@ async def lint_problem(
                 findings=[],
                 error_message=f"Failed to spawn lake process: {e}",
                 duration_ms=duration_ms,
-                provenance=_make_provenance(None, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -182,7 +185,7 @@ async def lint_problem(
                 findings=[],
                 error_message=f"Exceeded {timeout}s timeout",
                 duration_ms=duration_ms,
-                provenance=_make_provenance(None, toolchain),
+                provenance=_make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -276,14 +279,14 @@ async def lint_problem(
             )
 
     finally:
-        # Cleanup temp file and build artifacts (use sanitized ID)
-        _cleanup_problem_artifacts(workspace, safe_id)
+        # Cleanup temp file and build artifacts
+        _cleanup_problem_artifacts(workspace, file_stem)
 
 
-def _cleanup_problem_artifacts(workspace: Path, problem_id: str):
+def _cleanup_problem_artifacts(workspace: Path, file_stem: str):
     """Remove temp .lean file and any generated build artifacts."""
     # Remove the .lean file
-    problem_file = workspace / f"_Problem_{problem_id}.lean"
+    problem_file = workspace / f"{file_stem}.lean"
     try:
         problem_file.unlink(missing_ok=True)
     except Exception:
@@ -294,7 +297,7 @@ def _cleanup_problem_artifacts(workspace: Path, problem_id: str):
     build_lib = workspace / ".lake" / "build" / "lib"
     if build_lib.exists():
         for ext in [".olean", ".ilean", ".trace", ".c", ".o"]:
-            artifact = build_lib / f"_Problem_{problem_id}{ext}"
+            artifact = build_lib / f"{file_stem}{ext}"
             try:
                 artifact.unlink(missing_ok=True)
             except Exception:
@@ -304,7 +307,7 @@ def _cleanup_problem_artifacts(workspace: Path, problem_id: str):
     build_ir = workspace / ".lake" / "build" / "ir"
     if build_ir.exists():
         for ext in [".c", ".c.trace"]:
-            artifact = build_ir / f"_Problem_{problem_id}{ext}"
+            artifact = build_ir / f"{file_stem}{ext}"
             try:
                 artifact.unlink(missing_ok=True)
             except Exception:
@@ -344,8 +347,8 @@ async def run_batch(
     if workers <= 1:
         # Sequential execution
         results = []
-        for problem in problems:
-            result = await lint_problem(workspace, problem, toolchain, timeout)
+        for idx, problem in enumerate(problems):
+            result = await lint_problem(workspace, problem, toolchain, timeout, row_index=idx)
             results.append(result)
             if on_result:
                 on_result(result)
@@ -356,14 +359,14 @@ async def run_batch(
         results = []
         results_lock = asyncio.Lock()
 
-        async def process_one(problem: Problem):
+        async def process_one(idx: int, problem: Problem):
             async with semaphore:
-                result = await lint_problem(workspace, problem, toolchain, timeout)
+                result = await lint_problem(workspace, problem, toolchain, timeout, row_index=idx)
                 async with results_lock:
                     results.append(result)
                     if on_result:
                         on_result(result)
                 return result
 
-        await asyncio.gather(*[process_one(p) for p in problems])
+        await asyncio.gather(*[process_one(i, p) for i, p in enumerate(problems)])
         return results

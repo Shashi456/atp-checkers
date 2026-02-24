@@ -31,7 +31,7 @@ namespace AtpLinter.IntToNat
 inductive ConversionKind where
   | toNat   -- Int.toNat: truncates negatives to 0
   | natAbs  -- Int.natAbs: takes absolute value
-  deriving Inhabited, Repr, BEq
+  deriving Inhabited, Repr, BEq, Hashable
 
 /-- Information about a detected Int-to-Nat conversion -/
 structure ToNatInfo where
@@ -190,9 +190,9 @@ structure AnalysisResult where
 /-- Deduplicate conversions by semantic key (pretty-printed argument + guard status).
     Uses insertion-order to guarantee deterministic output. -/
 def deduplicateConversions (convs : Array ToNatInfo) : Array ToNatInfo :=
-  let init : Std.HashMap (String × Bool) Nat × Array ToNatInfo := ({}, #[])
+  let init : Std.HashMap (String × ConversionKind × Bool) Nat × Array ToNatInfo := ({}, #[])
   let (_, out) := convs.foldl (init := init) fun (seen, out) conv =>
-    let key := (conv.argumentStr, conv.guardEvidence.isSome)
+    let key := (conv.argumentStr, conv.kind, conv.guardEvidence.isSome)
     match seen[key]? with
     | some idx =>
       if (out[idx]!).unsafetyEvidence.isNone && conv.unsafetyEvidence.isSome then

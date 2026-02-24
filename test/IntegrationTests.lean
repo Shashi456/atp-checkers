@@ -146,4 +146,22 @@ def dedupBugDivMaybe (a b : Nat) : Nat := a / b
 #check_atp dedupBugDivMaybe
 #assert_finding_count dedupBugDivMaybe 2
 
+-- ============================================================
+-- Regression: #check_atp_all must not skip proof_* names
+-- ============================================================
+
+-- Verify #check_atp_all doesn't skip proof_* names
+def proof_user (a b : Nat) : Nat := a / b
+#check_atp proof_user
+#assert_finding_count proof_user 2
+
+-- ============================================================
+-- Regression: Int.natAbs must not suppress Int.toNat findings
+-- ============================================================
+
+-- Verify Int.natAbs doesn't suppress Int.toNat findings
+def intToNatDedupBug (a : Int) : Nat := Int.natAbs a + Int.toNat a
+#check_atp intToNatDedupBug
+#assert_finding_count intToNatDedupBug 1
+
 end Integration

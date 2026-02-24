@@ -9,3 +9,4 @@ import PrefixScopeTests
 import StructuralCheckerTests
 import AdvancedCheckerTests
 import IntegrationTests
+import CoverageTests

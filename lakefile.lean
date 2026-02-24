@@ -12,7 +12,7 @@ lean_lib «AtpLinter» where
 
 lean_lib «AtpLinterTest» where
   srcDir := "test"
-  globs := #[.one `AllTests, .one `ArithmeticSemanticsTests, .one `GuardProvingTests, .one `PrefixScopeTests, .one `StructuralCheckerTests, .one `AdvancedCheckerTests, .one `IntegrationTests]
+  globs := #[.one `AllTests, .one `ArithmeticSemanticsTests, .one `GuardProvingTests, .one `PrefixScopeTests, .one `StructuralCheckerTests, .one `AdvancedCheckerTests, .one `IntegrationTests, .one `CoverageTests]
 
 lean_lib «AtpLinterDemo» where
   srcDir := "test"

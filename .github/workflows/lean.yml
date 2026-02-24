@@ -18,3 +18,4 @@ jobs:
           test: |
             lake build
             lake build AtpLinterTest
+            python3 -m unittest discover -s runner_tests -p "test_*.py"

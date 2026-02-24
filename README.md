@@ -193,7 +193,8 @@ atp-checkers/
 ├── lean-toolchain             # Lean 4 v4.24.0
 ├── Main.lean                  # CLI entry point
 ├── src/AtpLinter/             # 13 checker modules + core infrastructure
-├── test/                      # 6 gating + 3 demo test suites
+├── test/                      # 7 gating + 3 demo test suites
+├── runner_tests/              # Python runner unit tests
 ├── runner/                    # Python JSONL batch runner
 ├── datasets/examples/         # Smoke test datasets
 ├── LIMITATIONS.md             # What the linter can and cannot do
@@ -235,4 +236,4 @@ analysis can and cannot catch in Lean formalizations, including:
 ## CI
 
 GitHub Actions workflow at `.github/workflows/lean.yml` runs `lake build` and
-`lake build AtpLinterTest` on push.
+`lake build AtpLinterTest`, plus Python runner unit tests, on push.

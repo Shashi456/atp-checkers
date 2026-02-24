@@ -475,9 +475,6 @@ def isAuxiliaryDecl (name : Name) : Bool :=
   -- Check specific suffixes using Name component matching
   match name with
   | .str _ s =>
-    s.startsWith "match_" ||
-    s.startsWith "proof_" ||
-    s.startsWith "eq_" ||
     s == "rec" || s == "recOn" || s == "casesOn" ||
     s == "below" || s == "brecOn" || s == "noConfusion" ||
     s.startsWith "sizeOf" || s == "inj"
@@ -488,7 +485,7 @@ def getLocalDecls (env : Environment) (currModuleName : Name) : Array Name :=
   -- PERFORMANCE FIX: Use foldl instead of toList to avoid intermediate allocation
   -- Only check map₂ (newly added during elaboration) - map₁ contains imported decls
   env.constants.map₂.foldl (init := #[]) fun result name _ =>
-    if !name.isInternal && !isAuxiliaryDecl name && isLocalDecl env currModuleName name then
+    if !isAuxiliaryDecl name && isLocalDecl env currModuleName name then
       result.push name
     else
       result
