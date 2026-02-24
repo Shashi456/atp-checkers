@@ -3,6 +3,7 @@
   Demo/example files are in DemoTests.lean (separate root).
 -/
 
+import TestAssertions
 import ArithmeticSemanticsTests
 import GuardProvingTests
 import PrefixScopeTests

@@ -2,13 +2,10 @@
   Integration Tests
 
   Cross-checker, batch, deduplication, and integration tests.
-
-  TODO(#cov_assert_has):
-  Reuse the #cov_assert machinery across all test files,
-  including this one, to assert that specific lines are covered by specific tests.
 -/
 
 import AtpLinter
+import TestAssertions
 set_option linter.unusedVariables false
 
 namespace Integration
@@ -160,7 +157,23 @@ Actual: warns DivisionByZero + IntDivTruncation.
 Prop-valued *definitions* are analyzed (only theorem *proof terms* are skipped).
 -/
 def propValuedDefWithDiv (x y : Nat) : Prop := (x / y = x)
-#check_atp propValuedDefWithDiv
+/--
+info: Analysis of Integration.propValuedDefWithDiv:
+──────────────────────────────────────────────────
+[WARNING] Integration.propValuedDefWithDiv: Potential Division by Zero
+  x / y has no guard ensuring y ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : y ≠ 0` or `h : y > 0`
+
+[WARNING] Integration.propValuedDefWithDiv: Integer Division Truncation
+  x / y may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp propValuedDefWithDiv
 
 -- ============================================================
 -- Multiple Issues in One Declaration
@@ -168,7 +181,23 @@ def propValuedDefWithDiv (x y : Nat) : Prop := (x / y = x)
 
 -- ATP linter flags: DivisionByZero + IntDivTruncation. (Unused n is flagged by Lean's built-in linter, not ATP.)
 def multipleIssues (n a b : Nat) : Nat := a / b
-#check_atp multipleIssues
+/--
+info: Analysis of Integration.multipleIssues:
+──────────────────────────────────────────────────
+[WARNING] Integration.multipleIssues: Potential Division by Zero
+  a / b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0` or `h : b > 0`
+
+[WARNING] Integration.multipleIssues: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp multipleIssues
 
 -- ============================================================
 -- Cross-checker Combined
@@ -178,45 +207,93 @@ def multipleIssues (n a b : Nat) : Nat := a / b
 theorem combined_vacuous_div : ∀ x : Fin 0, ∀ n : Nat, n / 0 = 0 := by
   intro x
   exact Fin.elim0 x
-#check_atp combined_vacuous_div
+/--
+info: Analysis of Integration.combined_vacuous_div:
+──────────────────────────────────────────────────
+[ERROR] Integration.combined_vacuous_div: Potential Division by Zero
+  n / 0 divides by literal zero!
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: This is definitely division by zero - the divisor is 0
+
+[ERROR] Integration.combined_vacuous_div: Vacuous Theorem
+  Quantified over empty domain: 'x' has type Fin 0 (Fin 0 has no elements)
+  Taxonomy: I.a - Specification Error
+  Suggestion: Check bounds - domain should likely be non-empty (e.g., Fin n with n > 0)
+
+[WARNING] Integration.combined_vacuous_div: Unused Quantified Variable
+  ∀ x : Fin 0 is bound but never used in body
+  Taxonomy: I.a - Specification Error
+  Suggestion: Remove unused variable or use it in the statement
+
+──────────────────────────────────────────────────
+Summary: 2 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp combined_vacuous_div
 
 -- ============================================================
 -- Dedup Finding Count Assertions
 -- ============================================================
 
-/-- Assert that #check_atp produces exactly `expected` findings for `name` -/
-syntax (name := assertFindingCount) "#assert_finding_count " ident num : command
-
-open Lean Elab Command Meta in
-@[command_elab assertFindingCount]
-def elabAssertFindingCount : CommandElab := fun stx => do
-  let id := stx[1]
-  let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
-  let some expected := stx[2].isNatLit?
-    | throwError "Expected a number literal"
-  let findings ← liftTermElabM do
-    let analysis ← AtpLinter.analyzeDecl name
-    AtpLinter.toFindings analysis
-  if findings.size != expected then
-    throwError "Expected {expected} finding(s) for {name}, got {findings.size}"
-
 /-- HDiv.hDiv and Nat.div fire on the same expression.
     Dedup merges into 1 division finding + 1 truncation finding = 2 total.
     With h : b = 0, unsafety proof upgrades division to proven. -/
 def dedupBugDiv (a b : Nat) (h : b = 0) : Nat := a / b
-#check_atp dedupBugDiv
-#assert_finding_count dedupBugDiv 2
+/--
+info: Analysis of Integration.dedupBugDiv:
+──────────────────────────────────────────────────
+[WARNING] Integration.dedupBugDiv: Potential Division by Zero
+  a / b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0` or `h : b > 0`
+
+[WARNING] Integration.dedupBugDiv: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dedupBugDiv
+#cov_assert_count dedupBugDiv 2
 
 /-- HMod.hMod and Nat.mod fire on the same expression.
     Dedup merges into exactly 1 modulo finding. -/
 def dedupBugMod (a b : Nat) (h : b = 0) : Nat := a % b
-#check_atp dedupBugMod
-#assert_finding_count dedupBugMod 1
+/--
+info: Analysis of Integration.dedupBugMod:
+──────────────────────────────────────────────────
+[WARNING] Integration.dedupBugMod: Modulo Edge Case
+  a % b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0`. Note: in Lean, n % 0 = n
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dedupBugMod
+#cov_assert_count dedupBugMod 1
 
 /-- Division with no unsafety evidence — 1 division + 1 truncation = 2 findings. -/
 def dedupBugDivMaybe (a b : Nat) : Nat := a / b
-#check_atp dedupBugDivMaybe
-#assert_finding_count dedupBugDivMaybe 2
+/--
+info: Analysis of Integration.dedupBugDivMaybe:
+──────────────────────────────────────────────────
+[WARNING] Integration.dedupBugDivMaybe: Potential Division by Zero
+  a / b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0` or `h : b > 0`
+
+[WARNING] Integration.dedupBugDivMaybe: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dedupBugDivMaybe
+#cov_assert_count dedupBugDivMaybe 2
 
 -- ============================================================
 -- Regression: #check_atp_all must not skip proof_* names
@@ -224,8 +301,24 @@ def dedupBugDivMaybe (a b : Nat) : Nat := a / b
 
 -- Verify #check_atp_all doesn't skip proof_* names
 def proof_user (a b : Nat) : Nat := a / b
-#check_atp proof_user
-#assert_finding_count proof_user 2
+/--
+info: Analysis of Integration.proof_user:
+──────────────────────────────────────────────────
+[WARNING] Integration.proof_user: Potential Division by Zero
+  a / b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0` or `h : b > 0`
+
+[WARNING] Integration.proof_user: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp proof_user
+#cov_assert_count proof_user 2
 
 -- ============================================================
 -- Regression: Int.natAbs must not suppress Int.toNat findings
@@ -233,7 +326,18 @@ def proof_user (a b : Nat) : Nat := a / b
 
 -- Verify Int.natAbs doesn't suppress Int.toNat findings
 def intToNatDedupBug (a : Int) : Nat := Int.natAbs a + Int.toNat a
-#check_atp intToNatDedupBug
-#assert_finding_count intToNatDedupBug 1
+/--
+info: Analysis of Integration.intToNatDedupBug:
+──────────────────────────────────────────────────
+[WARNING] Integration.intToNatDedupBug: Unguarded Int.toNat
+  Int.toNat (a) has no guard ensuring (a) ≥ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : a ≥ 0` or use Int.natAbs for absolute value
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp intToNatDedupBug
+#cov_assert_count intToNatDedupBug 1
 
 end Integration
