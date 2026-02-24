@@ -3,6 +3,12 @@
 
   Integer division truncation, division-by-zero detection, modulo-by-zero,
   Int division variants, and Int division variant zero checking.
+
+  TODO(#guard_msgs)
+  TODO(#eval): Do not leave '#eval's around,
+  they pollute the compile output. Ideally, the project should
+  build with 'lake build --iofail',
+  which will error.
 -/
 
 import AtpLinter
@@ -16,7 +22,18 @@ namespace ArithmeticSemantics
 
 /-- BAD: 1/4 = 0 in Nat! Should be ERROR -/
 def fourthRoot (x : Nat) : Nat := x ^ (1 / 4)
-#check_atp fourthRoot
+/--
+info: Analysis of ArithmeticSemantics.fourthRoot:
+──────────────────────────────────────────────────
+[ERROR] ArithmeticSemantics.fourthRoot: Integer Division Truncation
+  1 / 4 definitely truncates to wrong value (1 / 4 = 0 in integer division, but 0.250000 mathematically)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Use Real/Rat division, or restructure to avoid fractional division
+
+──────────────────────────────────────────────────
+Summary: 1 error(s), 0 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp fourthRoot
 
 /-- BAD: 1/2 = 0 in Nat! Should be ERROR -/
 def halfPower (x : Nat) : Nat := x ^ (1 / 2)
@@ -43,12 +60,12 @@ def zeroDiv : Nat := 1 / 0
 #check_atp zeroDiv
 
 -- Verify the truncation values
-#eval (1 : Nat) / 4  -- 0, not 0.25
-#eval (1 : Nat) / 2  -- 0, not 0.5
-#eval (3 : Nat) / 4  -- 0, not 0.75
-#eval (4 : Nat) / 2  -- 2 (exact)
-#eval (16 : Nat) ^ ((1 : Nat) / 4)  -- Returns 1, not 2!
-#eval (81 : Nat) ^ ((1 : Nat) / 4)  -- Returns 1, not 3!
+-- #eval (1 : Nat) / 4  -- 0, not 0.25
+-- #eval (1 : Nat) / 2  -- 0, not 0.5
+-- #eval (3 : Nat) / 4  -- 0, not 0.75
+-- #eval (4 : Nat) / 2  -- 2 (exact)
+-- #eval (16 : Nat) ^ ((1 : Nat) / 4)  -- Returns 1, not 2!
+-- #eval (81 : Nat) ^ ((1 : Nat) / 4)  -- Returns 1, not 3!
 
 -- ============================================================
 -- Division-by-Zero Detection

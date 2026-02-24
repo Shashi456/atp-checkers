@@ -1,5 +1,7 @@
 /-
   Simple examples demonstrating ATP linter detection on definitions.
+
+  TODO: reuse cov_assert machinery.
 -/
 
 import AtpLinter

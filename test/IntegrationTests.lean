@@ -2,6 +2,10 @@
   Integration Tests
 
   Cross-checker, batch, deduplication, and integration tests.
+
+  TODO(#cov_assert_has):
+  Reuse the #cov_assert machinery across all test files,
+  including this one, to assert that specific lines are covered by specific tests.
 -/
 
 import AtpLinter

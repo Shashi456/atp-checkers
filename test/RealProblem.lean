@@ -1,5 +1,9 @@
 import AtpLinter
 
+-- TODO: as usual,
+-- cleanup test using the cov_assert machinery,
+-- and maybe move this test to a more appropriate test file.
+
 -- The actual problem (simplified without Mathlib Set notation)
 -- This demonstrates the truncated subtraction issue
 

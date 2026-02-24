@@ -4,6 +4,12 @@
   Full-scope guard checking, pathological types, binder-type traversal edge cases.
   Tests core invariants of the ATP linter. Guard checking uses the full proof-state
   context (all hypotheses are available regardless of binder order).
+
+  TODO(check comments):
+  The comments in the file used to assume
+  that one can only use hyps that occur before a divison.
+  Please clean up this file and update the comments to reflect that ALL hyps are in scope for guard proving,
+  regardless of order.
 -/
 
 import AtpLinter
@@ -51,7 +57,18 @@ Guard is introduced BEFORE the binder type that mentions `a / b`.
 Expected: No DivisionByZero (guarded). IntDivTruncation still fires (not guard-gated).
 -/
 def scopeDiv_guardBefore (a b : Nat) (hb : b ≠ 0) (x : Fin (a / b)) : Nat := 0
-#check_atp scopeDiv_guardBefore
+/--
+info: Analysis of PrefixScope.scopeDiv_guardBefore:
+──────────────────────────────────────────────────
+[WARNING] PrefixScope.scopeDiv_guardBefore: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp scopeDiv_guardBefore
 
 /--
 Nat subtraction is in the type of `x`. Guard `h : b ≤ a` is introduced AFTER `x`,
@@ -185,10 +202,10 @@ def zeroOverGuarded (x : Nat) (hx : x ≠ 0) : Nat := 0 / x
 
 /--
 Multiple binders with interleaved guards and risky ops.
-Division in `y`'s type sees BOTH `ha` and `hb` (full-scope).
+Division in `y`'s type should see `ha` but NOT `hb`.
 
 Expected:
-- Division `a / b` in Fin type: GUARDED (hb is in the full scope)
+- Division `a / b` in Fin type: UNGUARDED (hb comes after)
 -/
 def multiBinderScope (a b : Nat) (ha : a ≠ 0) (y : Fin (a / b)) (hb : b ≠ 0) : Nat := 0
 #check_atp multiBinderScope

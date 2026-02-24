@@ -3,6 +3,8 @@
 
   Axiom checker, vacuous hypotheses, empty domain vacuity,
   unused binder, and list/finset range checks.
+
+  TODO: cleanup test using the cov_assert machinery.
 -/
 
 import AtpLinter

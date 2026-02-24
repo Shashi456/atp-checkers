@@ -3,6 +3,18 @@
 
   Explicit TP/TN/FP/FN-style checks for checker behavior and confidence semantics.
   These are assertion-based (not observational #check output).
+
+  TODO(#cov_assert):
+  Move these checks into a separate part of the library,
+  not as random private defs in the test suite.
+  Also, for these checks,
+  unify the common infrastructure for checking findings (finding retrieval, summary formatting, etc).
+
+  TODO(#cov_assert_confidence):
+  Don't take the confidences as strings,
+  use some polish and create a new syntax that has these
+  as identifiers. This will actually throw a nice lean level
+  error if you typo the confidence name, instead of just saying "expected confidence 'proven' not found".
 -/
 
 import AtpLinter
