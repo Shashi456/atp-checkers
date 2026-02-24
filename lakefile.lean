@@ -6,13 +6,16 @@ package «atp-checkers» where
 require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git" @ "v4.24.0"
 
+require plausible from git
+  "https://github.com/leanprover-community/plausible" @ "main"
+
 lean_lib «AtpLinter» where
   srcDir := "src"
   roots := #[`AtpLinter]
 
 lean_lib «AtpLinterTest» where
   srcDir := "test"
-  globs := #[.one `AllTests, .one `ArithmeticSemanticsTests, .one `GuardProvingTests, .one `PrefixScopeTests, .one `StructuralCheckerTests, .one `AdvancedCheckerTests, .one `IntegrationTests, .one `CoverageTests]
+  globs := #[.one `AllTests, .one `TestAssertions, .one `ArithmeticSemanticsTests, .one `GuardProvingTests, .one `PrefixScopeTests, .one `StructuralCheckerTests, .one `AdvancedCheckerTests, .one `IntegrationTests, .one `CoverageTests]
 
 lean_lib «AtpLinterDemo» where
   srcDir := "test"

@@ -19,7 +19,7 @@
    "name": "plausible",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
-   "inherited": true,
+   "inherited": false,
    "configFile": "lakefile.toml"},
   {"url": "https://github.com/leanprover-community/LeanSearchClient",
    "type": "git",

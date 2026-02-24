@@ -40,7 +40,7 @@ Results are written to `out/results.jsonl`.
 | Axiom | User `axiom` declarations asserting Prop | Declaration type |
 | Vacuous Hypotheses | Contradictory hyps / empty domains | Prove `False` |
 | Unused Binder | `∀ x, ...` where `x` is unused | AST analysis |
-| Counterexample | Concrete counterexamples via `decide` | Enumeration |
+| Counterexample | Concrete counterexamples via `decide`/Plausible | Enumeration + random testing |
 | Cast After Truncation | Cast applied after truncating operation | Pattern matching |
 | Exponent Truncation | Negative/zero exponent issues | Guard + literals |
 | Analytic Domain | `x⁻¹`/sqrt/log without domain guard | Semantic proof |
@@ -152,7 +152,7 @@ Every finding carries a `confidence` field:
 | `"proven"` | The linter constructively proved the issue exists (e.g., proved `divisor = 0` from context). Low false-positive rate. |
 | `"maybe"` | Suspicious pattern detected, but the prover could not confirm or deny the issue. Meaningful false-positive rate. |
 
-The `provedBy` field records *how* the issue was proved (e.g., `"omega"`, `"assumption"`, `"decide"`, `"definitional"`), or `null` for `"maybe"` findings.
+The `provedBy` field records *how* the issue was proved (e.g., `"omega"`, `"assumption"`, `"decide"`, `"definitional"`, `"plausible"`), or `null` for `"maybe"` findings.
 
 When a safety guard cannot be proved, the linter also attempts to prove the
 **dangerous condition** (unsafety proving). For example, if `b ≠ 0` can't be

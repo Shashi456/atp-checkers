@@ -7,12 +7,16 @@
   - Other linters flagged the declaration
   - Declaration is in an autoformalization namespace
 
-  SOUNDNESS NOTES:
-  - Uses `decide` to evaluate fully-instantiated propositions
-  - Only reports when a counterexample is definitionally computed
-  - Fails closed: skips if any step is uncertain
+  Two-phase search:
+  1. Exhaustive enumeration over small domains (Bool, Nat 0–4, Int ±2, Fin ≤8)
+  2. Plausible random testing fallback (when exhaustive finds nothing)
 
-  LIMITATIONS:
+  SOUNDNESS NOTES:
+  - Exhaustive: uses `decide` to evaluate fully-instantiated propositions
+  - Plausible: `TestResult.failure` carries a proof of `¬ p`
+  - Both backends fail closed: skip if any step is uncertain
+
+  LIMITATIONS (exhaustive):
   - Only enumerates Bool, small Nat/Int, small Fin n
   - Requires Decidable instance for the proposition
   - Skips Type/Prop/function-typed binders
@@ -22,6 +26,7 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import Plausible
 
 open Lean Elab Meta Term
 
@@ -36,6 +41,12 @@ structure Config where
   maxFinSize : Nat := 8
   deriving Inhabited
 
+/-- How the counterexample was found -/
+inductive SearchMethod where
+  | exhaustive   -- Found by decide over enumerated values
+  | plausible    -- Found by Plausible random sampling
+  deriving Inhabited, BEq
+
 /-- A single variable assignment -/
 structure Assignment where
   name : Name
@@ -47,6 +58,7 @@ structure Assignment where
 structure CounterexampleResult where
   assignments : List Assignment
   instantiatedProp : String
+  method : SearchMethod := .exhaustive
   deriving Inhabited
 
 /-- Result of analyzing a declaration -/
@@ -236,6 +248,98 @@ def searchCounterexample (e : Expr) (cfg : Config) : MetaM (Option Counterexampl
   let (result, _) ← searchCounterexampleM e [] cfg |>.run 0
   return result
 
+-- ============================================================
+-- Plausible Fallback
+-- ============================================================
+
+/-- Helper that runs Plausible and extracts a machine-readable result.
+    Returns `none` if no counterexample found, `some (assignmentStrs, shrinkCount)` if found.
+    This function is called via `evalExpr` from `tryPlausibleImpl`. -/
+def runPlausibleHelper (p : Prop) [Plausible.Testable p]
+    (cfg : Plausible.Configuration) : IO (Option (List String × Nat)) := do
+  match ← Plausible.Testable.checkIO p cfg with
+  | .success _ => return none
+  | .gaveUp _ => return none
+  | .failure _ xs n => return some (xs, n)
+
+/-- Parse Plausible output lines into assignments and an optional issue description.
+    Plausible emits three line formats:
+    - `"var := {repr x}"` (from `addVarInfo`)
+    - `"guard: {printProp p}"` (from guard checks)
+    - `"issue: {s} does not hold"` (from decidable base case) -/
+def parsePlausibleOutput (lines : List String) : List Assignment × Option String := Id.run do
+  let mut assignments : List Assignment := []
+  let mut issueProp : Option String := none
+  for line in lines do
+    if line.startsWith "issue: " then
+      issueProp := some (line.drop 7 |>.replace " does not hold" "")
+    else if line.startsWith "guard: " then
+      pure ()  -- skip guard lines
+    else
+      match line.splitOn " := " with
+      | [nameStr, valueStr] =>
+        assignments := assignments ++ [{
+          name := .mkSimple nameStr.trim
+          value := mkStrLit valueStr  -- dummy Expr (not used downstream)
+          valueStr := valueStr
+        }]
+      | _ => pure ()  -- skip unparseable
+  (assignments, issueProp)
+
+/-- Unsafe implementation of Plausible fallback.
+    Bridges MetaM → IO using `evalExpr`, following the same pattern as
+    the `plausible` tactic (Plausible/Tactic.lean:196). -/
+private unsafe def tryPlausibleImpl (prop : Expr)
+    : MetaM (Option (List Assignment × Option String)) := do
+  -- Step 1: Decorate the proposition with NamedBinder for variable name reporting
+  let decorated ← Plausible.Decorations.addDecorations prop
+
+  -- Step 2: Try to synthesize a Testable instance
+  let testableType ← mkAppM ``Plausible.Testable #[decorated]
+  let inst? ← trySynthInstance testableType
+  match inst? with
+  | .none | .undef => return none  -- No Testable instance; gracefully skip
+  | .some inst =>
+    try
+      -- Step 3: Build the Plausible Configuration expression
+      let plausibleCfg : Plausible.Configuration := {
+        numInst := 200
+        maxSize := 100
+        randomSeed := some 42
+        quiet := true
+      }
+      let cfgExpr := toExpr plausibleCfg
+
+      -- Step 4: Build the expression `runPlausibleHelper decorated plausibleCfg`
+      let e ← mkAppOptM ``runPlausibleHelper #[decorated, inst, cfgExpr]
+
+      -- Step 5: Execute via evalExpr to get an IO action
+      let retType := mkApp (mkConst ``IO)
+        (mkApp (mkConst ``Option [0])
+          (mkApp2 (mkConst ``Prod [0, 0])
+            (mkApp (mkConst ``List [0]) (mkConst ``String))
+            (mkConst ``Nat)))
+
+      let ioAction ← evalExpr (IO (Option (List String × Nat))) retType e
+
+      -- Step 6: Run the IO action
+      let result ← ioAction
+
+      match result with
+      | none => return none
+      | some (strs, _) =>
+        let (assignments, issueProp) := parsePlausibleOutput strs
+        return some (assignments, issueProp)
+    catch _ =>
+      -- Any failure (timeout, missing instance, etc.) → skip
+      return none
+
+/-- Safe wrapper for the Plausible fallback.
+    Uses `@[implemented_by]` to contain the `unsafe evalExpr` boundary. -/
+@[implemented_by tryPlausibleImpl]
+opaque tryPlausibleSafe (prop : Expr) : MetaM (Option (List Assignment × Option String)) :=
+  return none
+
 /-- Check if a declaration contains sorry -/
 def containsSorry (constInfo : ConstantInfo) : Bool :=
   match constInfo.value? with
@@ -287,16 +391,41 @@ def analyzeDecl (declName : Name) (hasOtherFindings : Bool := false)
   if !isPropType then
     return { declName, counterexample := none, wasSkipped := true }
 
-  -- Run counterexample search
+  -- Phase 1: Exhaustive enumeration
   let emptyLCtx : LocalContext := {}
-  let result ← withLCtx emptyLCtx #[] do
+  let exhaustiveResult ← withLCtx emptyLCtx #[] do
     searchCounterexample type cfg
 
-  return {
-    declName := declName
-    counterexample := result
-    wasSkipped := false
-  }
+  -- If exhaustive search found something, return immediately
+  if exhaustiveResult.isSome then
+    return {
+      declName := declName
+      counterexample := exhaustiveResult
+      wasSkipped := false
+    }
+
+  -- Phase 2: Plausible fallback (only when exhaustive found nothing)
+  let plausibleResult ← withLCtx emptyLCtx #[] do
+    tryPlausibleSafe type
+
+  match plausibleResult with
+  | some (assignments, issueProp) =>
+    let propStr := issueProp.getD (← withLCtx emptyLCtx #[] do ppExprSimple type)
+    return {
+      declName := declName
+      counterexample := some {
+        assignments := assignments
+        instantiatedProp := propStr
+        method := .plausible
+      }
+      wasSkipped := false
+    }
+  | none =>
+    return {
+      declName := declName
+      counterexample := none
+      wasSkipped := false
+    }
 
 /-- Generate a report for a single declaration -/
 def generateReport (result : AnalysisResult) : String :=

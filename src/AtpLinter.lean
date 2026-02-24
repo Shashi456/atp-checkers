@@ -305,14 +305,17 @@ def toFindings (analysis : FullAnalysis) : MetaM (Array LintFinding) := do
   | some cex =>
     let assignmentStrs := cex.assignments.map fun a => s!"{a.name} := {a.valueStr}"
     let assignmentList := String.intercalate ", " assignmentStrs
+    let (provedBy, suggestionSuffix) := match cex.method with
+      | .exhaustive => ("decide", "evaluates to false")
+      | .plausible  => ("plausible", "evaluates to false (via random testing)")
     findings := findings.push {
       category := .counterexample
       severity := .error
       declName := analysis.declName
       message := s!"Counterexample found: [{assignmentList}] makes proposition false"
-      suggestion := s!"The instantiated proposition `{cex.instantiatedProp}` evaluates to false"
+      suggestion := s!"The instantiated proposition `{cex.instantiatedProp}` {suggestionSuffix}"
       confidence := .proven
-      provedBy := some "decide"
+      provedBy := some provedBy
     }
   | none => pure ()
 

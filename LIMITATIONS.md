@@ -57,6 +57,11 @@ far beyond these:
 The linter catches the *most common* mechanical errors seen in LLM-generated
 formalizations. It does not attempt to be exhaustive.
 
+The counterexample checker uses two backends: exhaustive enumeration over small
+domains (Bool, Nat 0–4, Int ±2, Fin ≤8, max 4 binders) and a Plausible random
+testing fallback for propositions beyond the enumeration boundary. The Plausible
+fallback uses a fixed random seed for reproducibility.
+
 ### 5. Confidence is not ground truth
 
 The `confidence` field (`"proven"` / `"maybe"`) reflects the linter's own
