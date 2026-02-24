@@ -15,16 +15,44 @@ namespace Integration
 
 -- This theorem has a division in its statement - should be flagged
 theorem divInStatement (x y : Nat) : x / y = x / y := rfl
-#check_atp divInStatement
+/--
+info: Analysis of Integration.divInStatement:
+──────────────────────────────────────────────────
+[WARNING] Integration.divInStatement: Potential Division by Zero
+  x / y has no guard ensuring y ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : y ≠ 0` or `h : y > 0`
+
+[WARNING] Integration.divInStatement: Integer Division Truncation
+  x / y may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp divInStatement
 
 -- This def has a division in its body - should be flagged
 def divInBody (x : Nat) : Nat := x / 2
-#check_atp divInBody
+/--
+info: Analysis of Integration.divInBody:
+──────────────────────────────────────────────────
+[WARNING] Integration.divInBody: Integer Division Truncation
+  x / 2 may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp divInBody
 
 -- A theorem with clean statement but messy proof - should report no issues
 theorem cleanStatement (n : Nat) : n = n := by
   rfl
-#check_atp cleanStatement
+/-- info: ✓ Integration.cleanStatement: No issues detected -/
+#guard_msgs in #check_atp cleanStatement
 
 -- ============================================================
 -- Batch Check (#check_atp_all)
@@ -56,16 +84,44 @@ def dedupTest_diteBranches (a b : Nat) : Nat :=
     a / b  -- guarded by h
   else
     a / b  -- NOT guarded (h : ¬(b ≠ 0) = h : b = 0)
-#check_atp dedupTest_diteBranches
+/--
+info: Analysis of Integration.dedupTest_diteBranches:
+──────────────────────────────────────────────────
+[WARNING] Integration.dedupTest_diteBranches: Potential Division by Zero
+  a / b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0` or `h : b > 0`
+
+[WARNING] Integration.dedupTest_diteBranches: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 2 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dedupTest_diteBranches
 
 /--
 Division appears in both type and body with different contexts.
 
-Expected: Should warn for type occurrence (guard after).
+Expected: hb guards the division in both type and body (full-scope).
+Only IntDivTruncation fires.
 -/
 def dedupTest_typeAndBody (a b : Nat) (x : Fin (a / b)) (hb : b ≠ 0) : Nat :=
   a / b  -- body occurrence - hb IS in scope here
-#check_atp dedupTest_typeAndBody
+/--
+info: Analysis of Integration.dedupTest_typeAndBody:
+──────────────────────────────────────────────────
+[WARNING] Integration.dedupTest_typeAndBody: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dedupTest_typeAndBody
 
 -- ============================================================
 -- Type-Specific Edge Cases
@@ -73,11 +129,23 @@ def dedupTest_typeAndBody (a b : Nat) (x : Fin (a / b)) (hb : b ≠ 0) : Nat :=
 
 /-- Actual: no warnings. Fin division doesn't use Nat.div internally, so DivisionByZero doesn't fire. -/
 def finDivision (n : Nat) (a b : Fin (n + 1)) (hb : b ≠ 0) : Fin (n + 1) := a / b
-#check_atp finDivision
+/-- info: ✓ Integration.finDivision: No issues detected -/
+#guard_msgs in #check_atp finDivision
 
 /-- Generic division (no concrete type). mkZeroOf may fail. -/
 def genericDiv {α : Type} [HDiv α α α] [OfNat α 0] (a b : α) : α := a / b
-#check_atp genericDiv
+/--
+info: Analysis of Integration.genericDiv:
+──────────────────────────────────────────────────
+[WARNING] Integration.genericDiv: Potential Division by Zero
+  a / b has no guard ensuring b ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≠ 0` or `h : b > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp genericDiv
 
 -- ============================================================
 -- Prop-valued Definitions

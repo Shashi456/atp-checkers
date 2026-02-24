@@ -11,8 +11,10 @@
   without checking that the Int is non-negative.
 
   SOUNDNESS NOTES:
-  - Uses prefix-context traversal: when analyzing a binder type, only
-    hypotheses that are actually in scope at that point are available
+  - Uses full-scope traversal: when analyzing a binder type, ALL hypotheses
+    from the declaration signature are available for guard proving, regardless
+    of binder ordering. This matches the proof-state semantics where all
+    hypotheses are simultaneously available.
   - Int.natAbs is reported separately (not as "guarded") since it has
     different semantics (absolute value, not truncation)
 -/
@@ -88,11 +90,12 @@ def checkIntToNatUnsafe (intExpr : Expr) (lctx : LocalContext) (localInsts : Loc
   | none => return none
 
 /--
-Recursively find all Int.toNat usages in an expression using PREFIX-CONTEXT traversal.
+Recursively find all Int.toNat usages in an expression.
 
-CRITICAL: For soundness, when analyzing a binder type, we must only have
-hypotheses in scope that actually precede that binder. This means we use
-single-binder recursion, NOT telescope-based traversal.
+When called from `analyzeDecl`, the `lctx` parameter contains the FULL local
+context (all hypotheses from the declaration signature), so guard checking sees
+all available hypotheses regardless of binder order. For nested binders
+encountered during recursion, the context is extended naturally.
 -/
 partial def findIntToNat (e : Expr) (lctx : LocalContext) : MetaM (Array ToNatInfo) := do
   let mut results := #[]
@@ -137,26 +140,21 @@ partial def findIntToNat (e : Expr) (lctx : LocalContext) : MetaM (Array ToNatIn
       exprHash := e.hash
     }
 
-  -- Recurse with PREFIX-CONTEXT correct binder handling
-  -- Key: visit binder type BEFORE introducing later binders
+  -- Recurse into sub-expressions, extending context for nested binders
   match e with
   | .app f a =>
       results := results ++ (← findIntToNat f lctx)
       results := results ++ (← findIntToNat a lctx)
 
   | .lam n ty body bi =>
-      -- Visit binder type in CURRENT context (before introducing this binder)
       results := results ++ (← findIntToNat ty lctx)
-      -- Then introduce the binder and recurse into body
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findIntToNat (body.instantiate1 fvar) lctx'
       results := results ++ bodyResults
 
   | .forallE n ty body bi =>
-      -- Visit binder type in CURRENT context (before introducing this binder)
       results := results ++ (← findIntToNat ty lctx)
-      -- Then introduce the binder and recurse into body
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findIntToNat (body.instantiate1 fvar) lctx'
@@ -211,22 +209,37 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let type := constInfo.type
   let value? := constInfo.value?
 
-  -- CRITICAL: Start with empty local context to avoid ambient hypotheses
-  -- affecting guard proofs. The declaration's type/value are closed terms.
   let emptyLCtx : LocalContext := {}
 
   let mut allConvs := #[]
 
-  -- Always analyze the type (statement/specification) under empty context
-  let typeConvs ← withLCtx emptyLCtx #[] (findIntToNat type emptyLCtx)
+  -- Analyze the type: open ALL binders first so every hypothesis is available
+  -- for guard checking, regardless of binder order (full proof-state semantics).
+  let typeConvs ← withLCtx emptyLCtx #[] do
+    forallTelescope type fun fvars body => do
+      let fullLCtx ← getLCtx
+      let mut convs := #[]
+      for fvar in fvars do
+        let ldecl ← fvar.fvarId!.getDecl
+        convs := convs ++ (← findIntToNat ldecl.type fullLCtx)
+      convs := convs ++ (← findIntToNat body fullLCtx)
+      return convs
   allConvs := allConvs ++ typeConvs
 
-  -- Only analyze value for non-Prop definitions (skip proof terms)
-  -- Proof terms can be enormous and contain incidental operations
+  -- Analyze value: open all lambda binders first for full-scope guard checking.
+  -- Only analyze value for non-Prop definitions (skip proof terms).
   if let some value := value? then
     let isPropType ← isProp type
     if !isPropType then
-      let valueConvs ← withLCtx emptyLCtx #[] (findIntToNat value emptyLCtx)
+      let valueConvs ← withLCtx emptyLCtx #[] do
+        lambdaTelescope value fun fvars body => do
+          let fullLCtx ← getLCtx
+          let mut convs := #[]
+          for fvar in fvars do
+            let ldecl ← fvar.fvarId!.getDecl
+            convs := convs ++ (← findIntToNat ldecl.type fullLCtx)
+          convs := convs ++ (← findIntToNat body fullLCtx)
+          return convs
       allConvs := allConvs ++ valueConvs
 
   -- Deduplicate findings

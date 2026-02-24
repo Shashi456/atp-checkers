@@ -1,8 +1,9 @@
 /-
-  Prefix Scope Tests
+  Full Scope Tests
 
-  Prefix-context soundness, pathological types, binder-type traversal edge cases.
-  Tests core soundness invariants of the ATP linter.
+  Full-scope guard checking, pathological types, binder-type traversal edge cases.
+  Tests core invariants of the ATP linter. Guard checking uses the full proof-state
+  context (all hypotheses are available regardless of binder order).
 -/
 
 import AtpLinter
@@ -11,22 +12,38 @@ set_option linter.unusedVariables false
 namespace PrefixScope
 
 -- ============================================================
--- Binder-Scope Correctness
+-- Full-Scope Guard Checking
 -- ============================================================
 
+
+
 /-!
-The key soundness invariant: when analyzing a binder type, only hypotheses
-that PRECEDE that binder should be available for guard proving.
+Guard checking uses full proof-state semantics: ALL hypotheses from the
+declaration signature are available for guard proving, regardless of
+binder ordering. This matches how Lean's proof state works.
 -/
 
 /--
 Division is in the type of `x`. The guard `hb : b ≠ 0` is introduced AFTER `x`,
-so it is NOT in scope for that binder type.
+but with full-scope checking it IS available for guard proving.
 
-Expected: DivisionByZero should warn UNGUARDED for the division in x's type.
+Expected: DivisionByZero should be GUARDED. IntDivTruncation still fires.
 -/
 def scopeDiv_guardAfter (a b : Nat) (x : Fin (a / b)) (hb : b ≠ 0) : Nat := 0
-#check_atp scopeDiv_guardAfter
+
+/--
+info: Analysis of PrefixScope.scopeDiv_guardAfter:
+──────────────────────────────────────────────────
+[WARNING] PrefixScope.scopeDiv_guardAfter: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp scopeDiv_guardAfter
+
 
 /--
 Guard is introduced BEFORE the binder type that mentions `a / b`.
@@ -38,9 +55,9 @@ def scopeDiv_guardBefore (a b : Nat) (hb : b ≠ 0) (x : Fin (a / b)) : Nat := 0
 
 /--
 Nat subtraction is in the type of `x`. Guard `h : b ≤ a` is introduced AFTER `x`,
-so it must not silence the warning.
+but with full-scope checking it IS available for guard proving.
 
-Expected: NatSubtraction should warn UNGUARDED.
+Expected: NatSubtraction should be GUARDED (no warning).
 -/
 def scopeSub_guardAfter (a b : Nat) (x : Fin (a - b)) (h : b ≤ a) : Nat := 0
 #check_atp scopeSub_guardAfter
@@ -55,9 +72,9 @@ def scopeSub_guardBefore (a b : Nat) (h : b ≤ a) (x : Fin (a - b)) : Nat := 0
 
 /--
 Int.toNat is in the type of `x`. Guard `hz : 0 ≤ z` is introduced AFTER `x`,
-so it must not silence the warning.
+but with full-scope checking it IS available for guard proving.
 
-Expected: IntToNat should warn UNGUARDED.
+Expected: IntToNat should be GUARDED (no warning).
 -/
 def scopeToNat_guardAfter (z : Int) (x : Fin (Int.toNat z)) (hz : 0 ≤ z) : Nat := 0
 #check_atp scopeToNat_guardAfter
@@ -168,10 +185,10 @@ def zeroOverGuarded (x : Nat) (hx : x ≠ 0) : Nat := 0 / x
 
 /--
 Multiple binders with interleaved guards and risky ops.
-Division in `y`'s type should see `ha` but NOT `hb`.
+Division in `y`'s type sees BOTH `ha` and `hb` (full-scope).
 
 Expected:
-- Division `a / b` in Fin type: UNGUARDED (hb comes after)
+- Division `a / b` in Fin type: GUARDED (hb is in the full scope)
 -/
 def multiBinderScope (a b : Nat) (ha : a ≠ 0) (y : Fin (a / b)) (hb : b ≠ 0) : Nat := 0
 #check_atp multiBinderScope
