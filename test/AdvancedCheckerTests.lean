@@ -96,9 +96,9 @@ theorem plausibleLargeNat : ∀ (n : Nat), n < 5 := by sorry
 info: Analysis of AdvancedChecker.plausibleLargeNat:
 ──────────────────────────────────────────────────
 [ERROR] AdvancedChecker.plausibleLargeNat: Counterexample Found
-  Counterexample found: [n := 6] makes proposition false
+  Counterexample found: [n := 5] makes proposition false
   Taxonomy: I.a - Specification Error
-  Suggestion: The instantiated proposition `6 < 5` evaluates to false (via random testing)
+  Suggestion: The instantiated proposition `5 < 5` evaluates to false (via random testing)
 
 ──────────────────────────────────────────────────
 Summary: 1 error(s), 0 warning(s), 0 info(s)

@@ -34,11 +34,15 @@ namespace AtpLinter.Counterexample
 
 /-- Configuration for counterexample search -/
 structure Config where
+  -- Exhaustive search
   maxBinders : Nat := 4
   maxAssignments : Nat := 2000
   natValues : List Nat := [0, 1, 2, 3, 4]
   intValues : List Int := [0, 1, -1, 2, -2]
   maxFinSize : Nat := 8
+  -- Plausible fallback
+  plausibleNumInst : Nat := 200
+  plausibleMaxSize : Nat := 100
   deriving Inhabited
 
 /-- How the counterexample was found -/
@@ -50,7 +54,7 @@ inductive SearchMethod where
 /-- A single variable assignment -/
 structure Assignment where
   name : Name
-  value : Expr
+  value : Option Expr := none  -- Only populated by exhaustive search
   valueStr : String
   deriving Inhabited
 
@@ -59,6 +63,7 @@ structure CounterexampleResult where
   assignments : List Assignment
   instantiatedProp : String
   method : SearchMethod := .exhaustive
+  rawLines : List String := []  -- Raw Plausible output for debugging/fallback display
   deriving Inhabited
 
 /-- Result of analyzing a declaration -/
@@ -234,7 +239,7 @@ partial def searchCounterexampleM (e : Expr) (assignments : List Assignment)
           set (currentCount + 1)
           let body' := body.instantiate1 v
           let valueStr ← ppExprSimple v
-          let assignment : Assignment := { name := n, value := v, valueStr := valueStr }
+          let assignment : Assignment := { name := n, value := some v, valueStr := valueStr }
           let result ← searchCounterexampleM body' (assignment :: assignments) cfg
           if result.isSome then return result
         return none
@@ -276,21 +281,24 @@ def parsePlausibleOutput (lines : List String) : List Assignment × Option Strin
     else if line.startsWith "guard: " then
       pure ()  -- skip guard lines
     else
+      -- Split on first " := " only; repr values can contain " := " (e.g. records)
       match line.splitOn " := " with
-      | [nameStr, valueStr] =>
-        assignments := assignments ++ [{
-          name := .mkSimple nameStr.trim
-          value := mkStrLit valueStr  -- dummy Expr (not used downstream)
-          valueStr := valueStr
-        }]
+      | nameStr :: rest =>
+        if rest.isEmpty then pure ()
+        else
+          let valueStr := " := ".intercalate rest
+          assignments := assignments ++ [{
+            name := .mkSimple nameStr.trim
+            valueStr := valueStr
+          }]
       | _ => pure ()  -- skip unparseable
   (assignments, issueProp)
 
 /-- Unsafe implementation of Plausible fallback.
     Bridges MetaM → IO using `evalExpr`, following the same pattern as
     the `plausible` tactic (Plausible/Tactic.lean:196). -/
-private unsafe def tryPlausibleImpl (prop : Expr)
-    : MetaM (Option (List Assignment × Option String)) := do
+private unsafe def tryPlausibleImpl (prop : Expr) (declName : Name) (cfg : Config)
+    : MetaM (Option (List Assignment × Option String × List String)) := do
   -- Step 1: Decorate the proposition with NamedBinder for variable name reporting
   let decorated ← Plausible.Decorations.addDecorations prop
 
@@ -302,10 +310,12 @@ private unsafe def tryPlausibleImpl (prop : Expr)
   | .some inst =>
     try
       -- Step 3: Build the Plausible Configuration expression
+      -- Per-declaration deterministic seed: different decls explore different randomness
+      let seed := (declName.hash).toNat
       let plausibleCfg : Plausible.Configuration := {
-        numInst := 200
-        maxSize := 100
-        randomSeed := some 42
+        numInst := cfg.plausibleNumInst
+        maxSize := cfg.plausibleMaxSize
+        randomSeed := some seed
         quiet := true
       }
       let cfgExpr := toExpr plausibleCfg
@@ -329,15 +339,18 @@ private unsafe def tryPlausibleImpl (prop : Expr)
       | none => return none
       | some (strs, _) =>
         let (assignments, issueProp) := parsePlausibleOutput strs
-        return some (assignments, issueProp)
-    catch _ =>
-      -- Any failure (timeout, missing instance, etc.) → skip
+        return some (assignments, issueProp, strs)
+    catch e =>
+      -- Fail closed: swallow exception but log for debugging
+      let msg ← e.toMessageData.toString
+      dbgTrace s!"[AtpLinter.Counterexample] Plausible fallback failed: {msg}" fun _ => pure ()
       return none
 
 /-- Safe wrapper for the Plausible fallback.
     Uses `@[implemented_by]` to contain the `unsafe evalExpr` boundary. -/
 @[implemented_by tryPlausibleImpl]
-opaque tryPlausibleSafe (prop : Expr) : MetaM (Option (List Assignment × Option String)) :=
+opaque tryPlausibleSafe (prop : Expr) (declName : Name) (cfg : Config)
+    : MetaM (Option (List Assignment × Option String × List String)) :=
   return none
 
 /-- Check if a declaration contains sorry -/
@@ -406,10 +419,10 @@ def analyzeDecl (declName : Name) (hasOtherFindings : Bool := false)
 
   -- Phase 2: Plausible fallback (only when exhaustive found nothing)
   let plausibleResult ← withLCtx emptyLCtx #[] do
-    tryPlausibleSafe type
+    tryPlausibleSafe type declName cfg
 
   match plausibleResult with
-  | some (assignments, issueProp) =>
+  | some (assignments, issueProp, rawLines) =>
     let propStr := issueProp.getD (← withLCtx emptyLCtx #[] do ppExprSimple type)
     return {
       declName := declName
@@ -417,6 +430,7 @@ def analyzeDecl (declName : Name) (hasOtherFindings : Bool := false)
         assignments := assignments
         instantiatedProp := propStr
         method := .plausible
+        rawLines := rawLines
       }
       wasSkipped := false
     }
