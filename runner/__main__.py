@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import re
 import sys
 from pathlib import Path
 
-from .loader import load_jsonl
+from .data_loader import load_jsonl, load_json, load_lean_dir, load_hf
 from .executor import run_batch, DEFAULT_TIMEOUT
 from .models import ParseError, LintResult, Provenance
 from datetime import datetime, timezone
@@ -20,13 +21,22 @@ def main():
         epilog="""
 Examples:
   python -m runner dataset.jsonl --workspace ./linter -o results/
-  python -m runner problems.jsonl --workspace ./linter --timeout 60 -o out/
+  python -m runner proofnet.jsonl -w ./linter -o results/
+  python -m runner AI-MO/CombiBench --format hf -w ./linter -o results/
+  python -m runner ./lean_dir/ --format lean -w ./linter -o results/
         """,
     )
     parser.add_argument(
         "dataset",
-        type=Path,
-        help="Path to JSONL dataset file",
+        type=str,
+        help="Dataset source: file path (jsonl/json), directory (lean), or HuggingFace repo ID (hf)",
+    )
+    parser.add_argument(
+        "--format", "-f",
+        type=str,
+        choices=["jsonl", "hf", "json", "lean"],
+        default="jsonl",
+        help="Dataset format (default: jsonl)",
     )
     parser.add_argument(
         "--workspace", "-w",
@@ -39,6 +49,19 @@ Examples:
         type=Path,
         required=True,
         help="Output directory for results",
+    )
+    parser.add_argument(
+        "--header-file",
+        type=Path,
+        default=None,
+        help="Path to a .lean file whose contents are prepended to every problem "
+             "(for headerless datasets that need import statements)",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        help="Split to use for HuggingFace datasets (default: prefers 'test', then first available)",
     )
     parser.add_argument(
         "--toolchain",
@@ -72,14 +95,21 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate inputs
-    if not args.dataset.exists():
-        print(f"Error: Dataset not found: {args.dataset}", file=sys.stderr)
-        sys.exit(1)
+    # Set up logging so data_loader info messages appear
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+    # Validate workspace
     if not args.workspace.exists():
         print(f"Error: Workspace not found: {args.workspace}", file=sys.stderr)
         sys.exit(1)
+
+    # Read header file if provided
+    header = None
+    if args.header_file:
+        if not args.header_file.exists():
+            print(f"Error: Header file not found: {args.header_file}", file=sys.stderr)
+            sys.exit(1)
+        header = args.header_file.read_text(encoding="utf-8")
 
     # Read toolchain from workspace
     workspace_toolchain = None
@@ -144,12 +174,48 @@ Examples:
 
     logs_dir.mkdir(exist_ok=True)
 
-    # Load problems (single pass)
-    print(f"Loading problems from {args.dataset}...")
-    problems, load_errors = load_jsonl(args.dataset)
+    # --- Load problems based on format ---
+    fmt = args.format
+    dataset_source = args.dataset  # used for error-result source field
+
+    if fmt == "jsonl":
+        dataset_path = Path(args.dataset)
+        if not dataset_path.exists():
+            print(f"Error: Dataset not found: {dataset_path}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Loading problems from {dataset_path}...")
+        problems, load_errors = load_jsonl(dataset_path, header=header)
+        dataset_source = dataset_path.stem
+
+    elif fmt == "json":
+        dataset_path = Path(args.dataset)
+        if not dataset_path.exists():
+            print(f"Error: Dataset not found: {dataset_path}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Loading problems from {dataset_path} (JSON array)...")
+        problems, load_errors = load_json(dataset_path, header=header)
+        dataset_source = dataset_path.stem
+
+    elif fmt == "lean":
+        dataset_path = Path(args.dataset)
+        if not dataset_path.is_dir():
+            print(f"Error: Not a directory: {dataset_path}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Loading .lean files from {dataset_path}/...")
+        problems, load_errors = load_lean_dir(dataset_path, header=header)
+        dataset_source = dataset_path.name
+
+    elif fmt == "hf":
+        print(f"Loading from HuggingFace: {args.dataset}...")
+        problems, load_errors = load_hf(
+            repo_id=args.dataset,
+            split=args.split,
+            header=header,
+        )
+        dataset_source = args.dataset.replace("/", "_")
 
     if load_errors:
-        print(f"Warning: {len(load_errors)} lines could not be parsed:", file=sys.stderr)
+        print(f"Warning: {len(load_errors)} entries could not be parsed:", file=sys.stderr)
         for err in load_errors[:5]:
             print(f"  Line {err.line_number}: {err.error}", file=sys.stderr)
         if len(load_errors) > 5:
@@ -183,10 +249,9 @@ Examples:
         )
         with open(results_file, "a", encoding="utf-8") as f:
             for err in load_errors:
-                # Use line number as problem ID since we couldn't parse the real ID
                 result = LintResult(
                     problem_id=f"_load_error_line_{err.line_number}",
-                    source=args.dataset.stem,
+                    source=dataset_source,
                     status="infra_error",
                     findings=[],
                     error_message=f"Failed to load from dataset: {err.error}\nRaw: {err.raw_line[:500]}",

@@ -18,7 +18,12 @@ class Problem:
     @property
     def natural_language(self) -> Optional[str]:
         """Get natural language statement if available."""
-        return self.metadata.get("natural_language") or self.metadata.get("nl_statement")
+        return (
+            self.metadata.get("natural_language")
+            or self.metadata.get("nl_statement")
+            or self.metadata.get("informal_prefix")
+            or self.metadata.get("natural")
+        )
 
 
 @dataclass
