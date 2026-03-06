@@ -20,8 +20,10 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 
 namespace AtpLinter.CastAfterTruncation
 
@@ -47,13 +49,6 @@ structure CastTruncInfo where
   innerExprStr : String := ""
   deriving Inhabited
 
-/-- Pretty print an expression for reporting -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    return "<expr>"
 
 /-- Check if an expression is integer or natural division (not Rat/Real/etc.) -/
 -- HDiv.hDiv has 6 args: α β γ inst dividend divisor

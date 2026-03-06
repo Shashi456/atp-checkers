@@ -50,17 +50,6 @@ structure AnalyticInfo where
   exprHash : UInt64
   deriving Inhabited
 
-/-- Pretty print an expression for reporting -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    return "<expr>"
-
-/-- Known mathlib names for analytic functions (as strings for pattern matching) -/
-def sqrtPatterns : List String := ["Real.sqrt", "sqrt", "Sqrt"]
-def logPatterns : List String := ["Real.log", ".log"]
 
 /-- Check if an expression is a syntactic non-negative literal (0, 1, 2, etc.) -/
 def isSyntacticNonNegLiteral (e : Expr) : Bool :=
@@ -420,12 +409,6 @@ def AnalyticOp.description : AnalyticOp → String
   | .inv => "x⁻¹ requires x ≠ 0 (returns 0 for zero input)"
   | .exp => "Real.exp has no domain restriction"
 
-/-- Human-readable guard description -/
-def AnalyticOp.guardNeeded : AnalyticOp → String
-  | .sqrt => "0 ≤"
-  | .log => "0 <"
-  | .inv => "≠ 0:"
-  | .exp => "(none)"
 
 /-- Generate a report for a single declaration -/
 def generateReport (result : AnalysisResult) : String :=

@@ -18,8 +18,10 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 
 namespace AtpLinter.UnusedBinder
 
@@ -35,20 +37,11 @@ structure UnusedBinderInfo where
   name : Name
   type : Expr
   kind : BinderKind  -- m2 fix: now tracks forall/lambda/exists
-  -- Backwards compat helper
-  isForall : Bool := match kind with | .forall_ => true | _ => false
   -- Pretty-printed strings
   nameStr : String := ""
   typeStr : String := ""
   deriving Inhabited
 
-/-- Pretty print an expression for reporting -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    return "<expr>"
 
 /-- Check if a name looks like an auto-generated underscore name -/
 def isUnderscoreName (name : Name) : Bool :=

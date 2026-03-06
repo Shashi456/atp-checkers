@@ -16,8 +16,10 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 
 namespace AtpLinter.IntDivTruncation
 
@@ -171,22 +173,6 @@ def classifyTruncation (dividendVal divisorVal : Option Int) : TruncationStatus 
       else .mayTruncate  -- x / 2 -> precision loss
   | _, _ => .mayTruncate  -- At least one unknown
 
-/-- Pretty print expression, with fallback for edge cases -/
-def ppExprSafe (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    match e with
-    | .bvar n => return s!"var{n}"
-    | .fvar id =>
-      -- Try to get the user name from the local context
-      try
-        let ldecl ← id.getDecl
-        return ldecl.userName.toString
-      catch _ =>
-        return "x"
-    | _ => return "<expr>"
 
 /-! ## Phase 4: Prefix-Context Traversal -/
 
@@ -208,8 +194,8 @@ partial def findDivisionsCore (e : Expr) : MetaM (Array TruncDivInfo) := do
 
     if status != .noTruncate then
       -- Pretty-print NOW while we have the correct context
-      let dividendStr ← ppExprSafe dividend
-      let divisorStr ← ppExprSafe divisor
+      let dividendStr ← ppExprSimple dividend
+      let divisorStr ← ppExprSimple divisor
       results := results.push {
         expr := e
         dividend := dividend
@@ -310,8 +296,6 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
 /-! ## Phase 5: Reporting -/
 
-/-- For backward compatibility with AtpLinter.lean -/
-def ppExprSimple (e : Expr) : MetaM String := ppExprSafe e
 
 /-- Generate a report for a single declaration -/
 def generateReport (result : AnalysisResult) : MetaM String := do

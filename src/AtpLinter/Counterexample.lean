@@ -26,9 +26,11 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 import Plausible
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 
 namespace AtpLinter.Counterexample
 
@@ -73,13 +75,6 @@ structure AnalysisResult where
   wasSkipped : Bool  -- true if we didn't run (gate not triggered)
   deriving Inhabited
 
-/-- Pretty print an expression -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    return "<expr>"
 
 /-- Make an Int literal expression -/
 def mkIntLitExpr (i : Int) : MetaM Expr := do

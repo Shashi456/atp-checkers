@@ -24,9 +24,11 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 open AtpLinter.SemanticGuards
 
 namespace AtpLinter.ExponentTruncation
@@ -50,13 +52,6 @@ structure ExponentInfo where
   exponentStr : String := ""
   deriving Inhabited
 
-/-- Pretty print an expression for reporting -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    return "<expr>"
 
 /-- Check if an expression is an Int type -/
 def isIntType (e : Expr) : MetaM Bool := do

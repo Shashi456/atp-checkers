@@ -22,9 +22,11 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 open AtpLinter.SemanticGuards
 
 namespace AtpLinter.IntToNat
@@ -48,21 +50,6 @@ structure ToNatInfo where
   exprHash : UInt64 := 0
   deriving Inhabited
 
-/-- Pretty print an expression for reporting, with fallback for bound variables -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    match e with
-    | .bvar n => return s!"var{n}"
-    | .fvar id =>
-      try
-        let ldecl ← id.getDecl
-        return ldecl.userName.toString
-      catch _ =>
-        return "x"
-    | _ => return s!"<expr>"
 
 /-- Check Int.toNat guard using semantic prover -/
 def checkIntToNatGuard (intExpr : Expr) (lctx : LocalContext) (localInsts : LocalInstances) : MetaM (Option String) := do

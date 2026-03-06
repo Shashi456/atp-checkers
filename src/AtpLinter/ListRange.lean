@@ -19,8 +19,10 @@
 import Lean
 import Lean.Elab.Command
 import Lean.Meta.Basic
+import AtpLinter.Basic
 
 open Lean Elab Meta Term
+open AtpLinter (ppExprSimple)
 
 namespace AtpLinter.ListRange
 
@@ -35,21 +37,6 @@ structure RangeInfo where
   extraArgs : Array String := #[]
   deriving Inhabited
 
-/-- Pretty print an expression for reporting, with fallback for bound variables -/
-def ppExprSimple (e : Expr) : MetaM String := do
-  try
-    let fmt ← ppExpr e
-    return toString fmt
-  catch _ =>
-    match e with
-    | .bvar n => return s!"var{n}"
-    | .fvar id =>
-      try
-        let ldecl ← id.getDecl
-        return ldecl.userName.toString
-      catch _ =>
-        return "x"
-    | _ => return s!"<expr>"
 
 /-- Check if a name matches a target, handling qualified names robustly.
     Matches if the name equals the target, or ends with the target after a dot.

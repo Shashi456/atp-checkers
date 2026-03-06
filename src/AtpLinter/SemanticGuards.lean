@@ -68,61 +68,6 @@ private def getLocalPropHyps : MetaM (List Expr) := do
       else
         return acc
 
-/-- Check if a proposition is a linear arithmetic fact that omega can use.
-    Accepts LE.le, LT.lt, Eq, Ne on Nat/Int, plus And/Not compounds.
-    Also accepts type-specific versions like Nat.le, Nat.lt after whnf. -/
-private partial def isArithmeticProp (ty : Expr) : MetaM Bool := do
-  let ty ← whnf ty
-  match ty.getAppFn.constName? with
-  -- Typeclass-based comparisons
-  | some ``LE.le | some ``LT.lt | some ``GE.ge | some ``GT.gt =>
-    -- Verify arguments are Nat or Int typed
-    let args := ty.getAppArgs
-    if args.size >= 1 then
-      let argTy ← whnf args[0]!
-      return argTy.isConstOf ``Nat || argTy.isConstOf ``Int
-    return false
-  -- Type-specific comparisons (after whnf, typeclass versions reduce to these)
-  | some ``Nat.le | some ``Nat.lt =>
-    return true  -- Already known to be Nat
-  | some ``Int.le | some ``Int.lt =>
-    return true  -- Already known to be Int
-  | some ``Eq | some ``Ne =>
-    -- For Eq/Ne, check the type argument (first arg)
-    let args := ty.getAppArgs
-    if args.size >= 1 then
-      let argTy ← whnf args[0]!
-      return argTy.isConstOf ``Nat || argTy.isConstOf ``Int
-    return false
-  | some ``And =>
-    -- Recurse into both conjuncts
-    let args := ty.getAppArgs
-    if args.size >= 2 then
-      let left ← isArithmeticProp args[0]!
-      let right ← isArithmeticProp args[1]!
-      return left && right
-    return false
-  | some ``Not =>
-    -- Recurse into negated prop
-    let args := ty.getAppArgs
-    if args.size >= 1 then
-      isArithmeticProp args[0]!
-    else
-      return false
-  | _ => return false
-
-/-- Collect local hypotheses that are arithmetic facts omega can use. -/
-private def getLocalArithmeticHyps : MetaM (List Expr) := do
-  let lctx ← getLCtx
-  lctx.foldlM (init := []) fun acc decl => do
-    if decl.isImplementationDetail then
-      return acc
-    let h : Expr := mkFVar decl.fvarId
-    let ht ← inferType h
-    if (← isProp ht) && (← isArithmeticProp ht) then
-      return h :: acc
-    else
-      return acc
 
 /-- True iff `e` has (whnf) type exactly `Nat` or `Int`. -/
 def isNatOrInt (e : Expr) : MetaM Bool := do
@@ -376,10 +321,6 @@ def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
   finally
     saved.restore
 
-/-- Like `tryProve?`, but run it under an explicit `(lctx, insts)` snapshot. -/
-def tryProveIn? (snap : LocalCtxSnapshot) (goal : Expr) (useOmega : Bool := true)
-    (useGrind : Bool := false) : MetaM (Option ProvedBy) :=
-  withSnapshot snap (tryProve? goal useOmega useGrind)
 
 /-- Try to prove a dangerous condition (e.g., d = 0, a < b, x < 0).
     Uses the same prover stack as guard proving but with grind enabled by default

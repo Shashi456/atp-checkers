@@ -12,7 +12,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from typing import Optional, Tuple
 
 from .models import Problem, ParseError
 
@@ -208,35 +208,6 @@ def load_jsonl(
 
     return problems, errors
 
-
-def load_jsonl_streaming(
-    path: Path,
-    source: str | None = None,
-    header: str | None = None,
-) -> Iterator[Problem | ParseError]:
-    """Stream problems from a JSONL file."""
-    if source is None:
-        source = path.stem
-
-    with open(path, "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError as e:
-                yield ParseError(line_num, f"Invalid JSON: {e}", line[:200])
-                continue
-
-            try:
-                resolved = resolve_row(data, row_index=line_num, header=header)
-            except ValueError as e:
-                yield ParseError(line_num, str(e), line[:200])
-                continue
-
-            yield _resolved_to_problem(resolved, source)
 
 
 # ---------------------------------------------------------------------------
