@@ -147,29 +147,40 @@ partial def findCastTruncPatterns (e : Expr) : MetaM (Array CastTruncInfo) := do
   -- Recurse into subexpressions with proper binder handling
   match e with
   | .app f a =>
-    results := results ++ (← findCastTruncPatterns f)
-    results := results ++ (← findCastTruncPatterns a)
+    for r in (← findCastTruncPatterns f) do
+      results := results.push r
+    for r in (← findCastTruncPatterns a) do
+      results := results.push r
   | .lam n ty body bi =>
-    results := results ++ (← findCastTruncPatterns ty)
+    for r in (← findCastTruncPatterns ty) do
+      results := results.push r
     -- Properly introduce binder before recursing into body
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       findCastTruncPatterns (body.instantiate1 fvar)
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
   | .forallE n ty body bi =>
-    results := results ++ (← findCastTruncPatterns ty)
+    for r in (← findCastTruncPatterns ty) do
+      results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       findCastTruncPatterns (body.instantiate1 fvar)
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
   | .letE n ty val body _ =>
-    results := results ++ (← findCastTruncPatterns ty)
-    results := results ++ (← findCastTruncPatterns val)
+    for r in (← findCastTruncPatterns ty) do
+      results := results.push r
+    for r in (← findCastTruncPatterns val) do
+      results := results.push r
     let bodyResults ← withLetDecl n ty val fun fvar => do
       findCastTruncPatterns (body.instantiate1 fvar)
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
   | .mdata _ inner =>
-    results := results ++ (← findCastTruncPatterns inner)
+    for r in (← findCastTruncPatterns inner) do
+      results := results.push r
   | .proj _ _ inner =>
-    results := results ++ (← findCastTruncPatterns inner)
+    for r in (← findCastTruncPatterns inner) do
+      results := results.push r
   | _ => pure ()
 
   return results

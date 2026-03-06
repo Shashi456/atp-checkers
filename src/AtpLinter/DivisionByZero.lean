@@ -253,36 +253,47 @@ partial def findDivisions (e : Expr) (lctx : LocalContext) : MetaM (Array DivInf
   -- Recurse into sub-expressions, extending context for nested binders
   match e with
   | .app f a =>
-      results := results ++ (← findDivisions f lctx)
-      results := results ++ (← findDivisions a lctx)
+      for r in (← findDivisions f lctx) do
+        results := results.push r
+      for r in (← findDivisions a lctx) do
+        results := results.push r
 
   | .lam n ty body bi =>
-      results := results ++ (← findDivisions ty lctx)
+      for r in (← findDivisions ty lctx) do
+        results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findDivisions (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .forallE n ty body bi =>
-      results := results ++ (← findDivisions ty lctx)
+      for r in (← findDivisions ty lctx) do
+        results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findDivisions (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .letE name type value body _ =>
-      results := results ++ (← findDivisions type lctx)
-      results := results ++ (← findDivisions value lctx)
+      for r in (← findDivisions type lctx) do
+        results := results.push r
+      for r in (← findDivisions value lctx) do
+        results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
         findDivisions (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .mdata _ inner =>
-      results := results ++ (← findDivisions inner lctx)
+      for r in (← findDivisions inner lctx) do
+        results := results.push r
 
   | .proj _ _ inner =>
-      results := results ++ (← findDivisions inner lctx)
+      for r in (← findDivisions inner lctx) do
+        results := results.push r
 
   | _ => pure ()
 
@@ -336,10 +347,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       let mut divs := #[]
       for fvar in fvars do
         let ldecl ← fvar.fvarId!.getDecl
-        divs := divs ++ (← findDivisions ldecl.type fullLCtx)
-      divs := divs ++ (← findDivisions body fullLCtx)
+        for r in (← findDivisions ldecl.type fullLCtx) do
+          divs := divs.push r
+      for r in (← findDivisions body fullLCtx) do
+        divs := divs.push r
       return divs
-  allDivs := allDivs ++ typeDivs
+  for r in typeDivs do
+    allDivs := allDivs.push r
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
@@ -352,10 +366,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let mut divs := #[]
           for fvar in fvars do
             let ldecl ← fvar.fvarId!.getDecl
-            divs := divs ++ (← findDivisions ldecl.type fullLCtx)
-          divs := divs ++ (← findDivisions body fullLCtx)
+            for r in (← findDivisions ldecl.type fullLCtx) do
+              divs := divs.push r
+          for r in (← findDivisions body fullLCtx) do
+            divs := divs.push r
           return divs
-      allDivs := allDivs ++ valueDivs
+      for r in valueDivs do
+        allDivs := allDivs.push r
 
   -- Deduplicate findings (can get duplicates from HDiv.hDiv and Nat.div paths)
   allDivs := deduplicateDivisions allDivs

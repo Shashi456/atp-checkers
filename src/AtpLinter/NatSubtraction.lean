@@ -139,36 +139,47 @@ partial def findNatSubtractions (e : Expr) (lctx : LocalContext) : MetaM (Array 
   -- Recurse into sub-expressions, extending context for nested binders
   match e with
   | .app f a =>
-      results := results ++ (← findNatSubtractions f lctx)
-      results := results ++ (← findNatSubtractions a lctx)
+      for r in (← findNatSubtractions f lctx) do
+        results := results.push r
+      for r in (← findNatSubtractions a lctx) do
+        results := results.push r
 
   | .lam n ty body bi =>
-      results := results ++ (← findNatSubtractions ty lctx)
+      for r in (← findNatSubtractions ty lctx) do
+        results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findNatSubtractions (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .forallE n ty body bi =>
-      results := results ++ (← findNatSubtractions ty lctx)
+      for r in (← findNatSubtractions ty lctx) do
+        results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findNatSubtractions (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .letE name type value body _ =>
-      results := results ++ (← findNatSubtractions type lctx)
-      results := results ++ (← findNatSubtractions value lctx)
+      for r in (← findNatSubtractions type lctx) do
+        results := results.push r
+      for r in (← findNatSubtractions value lctx) do
+        results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
         findNatSubtractions (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .mdata _ inner =>
-      results := results ++ (← findNatSubtractions inner lctx)
+      for r in (← findNatSubtractions inner lctx) do
+        results := results.push r
 
   | .proj _ _ inner =>
-      results := results ++ (← findNatSubtractions inner lctx)
+      for r in (← findNatSubtractions inner lctx) do
+        results := results.push r
 
   | _ => pure ()
 
@@ -218,10 +229,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       let mut subs := #[]
       for fvar in fvars do
         let ldecl ← fvar.fvarId!.getDecl
-        subs := subs ++ (← findNatSubtractions ldecl.type fullLCtx)
-      subs := subs ++ (← findNatSubtractions body fullLCtx)
+        for r in (← findNatSubtractions ldecl.type fullLCtx) do
+          subs := subs.push r
+      for r in (← findNatSubtractions body fullLCtx) do
+        subs := subs.push r
       return subs
-  allSubs := allSubs ++ typeSubs
+  for r in typeSubs do
+    allSubs := allSubs.push r
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
@@ -234,10 +248,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let mut subs := #[]
           for fvar in fvars do
             let ldecl ← fvar.fvarId!.getDecl
-            subs := subs ++ (← findNatSubtractions ldecl.type fullLCtx)
-          subs := subs ++ (← findNatSubtractions body fullLCtx)
+            for r in (← findNatSubtractions ldecl.type fullLCtx) do
+              subs := subs.push r
+          for r in (← findNatSubtractions body fullLCtx) do
+            subs := subs.push r
           return subs
-      allSubs := allSubs ++ valueSubs
+      for r in valueSubs do
+        allSubs := allSubs.push r
 
   -- Deduplicate findings
   allSubs := deduplicateSubtractions allSubs

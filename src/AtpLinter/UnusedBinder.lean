@@ -96,11 +96,13 @@ partial def findUnusedBinders (e : Expr) : MetaM (Array UnusedBinderInfo) := do
     -- Recurse into body (instantiate to handle nested binders correctly)
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       findUnusedBinders (body.instantiate1 fvar)
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
 
     -- Also check the type for unused binders (rare but possible)
     let typeResults ← findUnusedBinders ty
-    results := results ++ typeResults
+    for r in typeResults do
+      results := results.push r
 
   | .lam n ty body bi =>
     let isUnused := !body.hasLooseBVar 0
@@ -120,24 +122,29 @@ partial def findUnusedBinders (e : Expr) : MetaM (Array UnusedBinderInfo) := do
 
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       findUnusedBinders (body.instantiate1 fvar)
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
 
     let typeResults ← findUnusedBinders ty
-    results := results ++ typeResults
+    for r in typeResults do
+      results := results.push r
 
   | .letE name type value body _ =>
     -- For let bindings, we don't report them as "unused quantified variables"
     -- since they're not quantifiers, but we still recurse into their components
 
     let typeResults ← findUnusedBinders type
-    results := results ++ typeResults
+    for r in typeResults do
+      results := results.push r
 
     let valueResults ← findUnusedBinders value
-    results := results ++ valueResults
+    for r in valueResults do
+      results := results.push r
 
     let bodyResults ← withLetDecl name type value fun fvar => do
       findUnusedBinders (body.instantiate1 fvar)
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
 
   | .app f a =>
     -- m2 fix: Check for Exists application to properly label existential binders
@@ -161,22 +168,29 @@ partial def findUnusedBinders (e : Expr) : MetaM (Array UnusedBinderInfo) := do
         -- Recurse into body
         let bodyResults ← withLocalDecl n bi ty fun fvar => do
           findUnusedBinders (body.instantiate1 fvar)
-        results := results ++ bodyResults
+        for r in bodyResults do
+          results := results.push r
         let typeResults ← findUnusedBinders ty
-        results := results ++ typeResults
+        for r in typeResults do
+          results := results.push r
       | _ =>
         -- Exists applied to non-lambda (unusual)
-        results := results ++ (← findUnusedBinders a)
+        for r in (← findUnusedBinders a) do
+          results := results.push r
     | _ =>
       -- Normal application
-      results := results ++ (← findUnusedBinders f)
-      results := results ++ (← findUnusedBinders a)
+      for r in (← findUnusedBinders f) do
+        results := results.push r
+      for r in (← findUnusedBinders a) do
+        results := results.push r
 
   | .mdata _ inner =>
-    results := results ++ (← findUnusedBinders inner)
+    for r in (← findUnusedBinders inner) do
+      results := results.push r
 
   | .proj _ _ inner =>
-    results := results ++ (← findUnusedBinders inner)
+    for r in (← findUnusedBinders inner) do
+      results := results.push r
 
   | _ => pure ()
 

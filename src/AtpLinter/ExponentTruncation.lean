@@ -178,34 +178,45 @@ partial def findExponentPatterns (e : Expr) (lctx : LocalContext) (insts : Local
   -- Recurse into subexpressions
   match e with
   | .forallE n ty body bi =>
-    results := results ++ (← findExponentPatterns ty lctx insts)
+    for r in (← findExponentPatterns ty lctx insts) do
+      results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let newLCtx ← getLCtx
       let newInsts ← getLocalInstances
       findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
   | .lam n ty body bi =>
-    results := results ++ (← findExponentPatterns ty lctx insts)
+    for r in (← findExponentPatterns ty lctx insts) do
+      results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let newLCtx ← getLCtx
       let newInsts ← getLocalInstances
       findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
   | .letE n ty val body _ =>
-    results := results ++ (← findExponentPatterns ty lctx insts)
-    results := results ++ (← findExponentPatterns val lctx insts)
+    for r in (← findExponentPatterns ty lctx insts) do
+      results := results.push r
+    for r in (← findExponentPatterns val lctx insts) do
+      results := results.push r
     let bodyResults ← withLetDecl n ty val fun fvar => do
       let newLCtx ← getLCtx
       let newInsts ← getLocalInstances
       findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
   | .app f a =>
-    results := results ++ (← findExponentPatterns f lctx insts)
-    results := results ++ (← findExponentPatterns a lctx insts)
+    for r in (← findExponentPatterns f lctx insts) do
+      results := results.push r
+    for r in (← findExponentPatterns a lctx insts) do
+      results := results.push r
   | .mdata _ inner =>
-    results := results ++ (← findExponentPatterns inner lctx insts)
+    for r in (← findExponentPatterns inner lctx insts) do
+      results := results.push r
   | .proj _ _ inner =>
-    results := results ++ (← findExponentPatterns inner lctx insts)
+    for r in (← findExponentPatterns inner lctx insts) do
+      results := results.push r
   | _ => pure ()
 
   return results
@@ -250,10 +261,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       let mut exps := #[]
       for fvar in fvars do
         let ldecl ← fvar.fvarId!.getDecl
-        exps := exps ++ (← findExponentPatterns ldecl.type fullLCtx fullInsts)
-      exps := exps ++ (← findExponentPatterns body fullLCtx fullInsts)
+        for r in (← findExponentPatterns ldecl.type fullLCtx fullInsts) do
+          exps := exps.push r
+      for r in (← findExponentPatterns body fullLCtx fullInsts) do
+        exps := exps.push r
       return exps
-  allExps := allExps ++ typeExps
+  for r in typeExps do
+    allExps := allExps.push r
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
@@ -267,10 +281,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let mut exps := #[]
           for fvar in fvars do
             let ldecl ← fvar.fvarId!.getDecl
-            exps := exps ++ (← findExponentPatterns ldecl.type fullLCtx fullInsts)
-          exps := exps ++ (← findExponentPatterns body fullLCtx fullInsts)
+            for r in (← findExponentPatterns ldecl.type fullLCtx fullInsts) do
+              exps := exps.push r
+          for r in (← findExponentPatterns body fullLCtx fullInsts) do
+            exps := exps.push r
           return exps
-      allExps := allExps ++ valueExps
+      for r in valueExps do
+        allExps := allExps.push r
 
   -- R3 fix: Simplified filter (no more zeroExponent case)
   let filteredExps := allExps.filter fun exp =>

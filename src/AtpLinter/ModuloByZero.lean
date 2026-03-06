@@ -226,36 +226,47 @@ partial def findModulos (e : Expr) (lctx : LocalContext) : MetaM (Array ModInfo)
   -- Recurse into sub-expressions, extending context for nested binders
   match e with
   | .app f a =>
-      results := results ++ (← findModulos f lctx)
-      results := results ++ (← findModulos a lctx)
+      for r in (← findModulos f lctx) do
+        results := results.push r
+      for r in (← findModulos a lctx) do
+        results := results.push r
 
   | .lam n ty body bi =>
-      results := results ++ (← findModulos ty lctx)
+      for r in (← findModulos ty lctx) do
+        results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findModulos (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .forallE n ty body bi =>
-      results := results ++ (← findModulos ty lctx)
+      for r in (← findModulos ty lctx) do
+        results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
         findModulos (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .letE name type value body _ =>
-      results := results ++ (← findModulos type lctx)
-      results := results ++ (← findModulos value lctx)
+      for r in (← findModulos type lctx) do
+        results := results.push r
+      for r in (← findModulos value lctx) do
+        results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
         findModulos (body.instantiate1 fvar) lctx'
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .mdata _ inner =>
-      results := results ++ (← findModulos inner lctx)
+      for r in (← findModulos inner lctx) do
+        results := results.push r
 
   | .proj _ _ inner =>
-      results := results ++ (← findModulos inner lctx)
+      for r in (← findModulos inner lctx) do
+        results := results.push r
 
   | _ => pure ()
 
@@ -307,10 +318,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       let mut mods := #[]
       for fvar in fvars do
         let ldecl ← fvar.fvarId!.getDecl
-        mods := mods ++ (← findModulos ldecl.type fullLCtx)
-      mods := mods ++ (← findModulos body fullLCtx)
+        for r in (← findModulos ldecl.type fullLCtx) do
+          mods := mods.push r
+      for r in (← findModulos body fullLCtx) do
+        mods := mods.push r
       return mods
-  allMods := allMods ++ typeMods
+  for r in typeMods do
+    allMods := allMods.push r
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions.
@@ -323,10 +337,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let mut mods := #[]
           for fvar in fvars do
             let ldecl ← fvar.fvarId!.getDecl
-            mods := mods ++ (← findModulos ldecl.type fullLCtx)
-          mods := mods ++ (← findModulos body fullLCtx)
+            for r in (← findModulos ldecl.type fullLCtx) do
+              mods := mods.push r
+          for r in (← findModulos body fullLCtx) do
+            mods := mods.push r
           return mods
-      allMods := allMods ++ valueMods
+      for r in valueMods do
+        allMods := allMods.push r
 
   -- Deduplicate findings
   allMods := deduplicateModulos allMods

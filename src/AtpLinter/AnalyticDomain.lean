@@ -294,39 +294,50 @@ partial def findAnalyticPatterns (e : Expr) (lctx : LocalContext) (insts : Local
   -- Recurse into subexpressions with proper context handling
   match e with
   | .forallE n ty body bi =>
-    results := results ++ (← findAnalyticPatterns ty lctx insts)
+    for r in (← findAnalyticPatterns ty lctx insts) do
+      results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let lctx' ← getLCtx
       let insts' ← getLocalInstances
       findAnalyticPatterns (body.instantiate1 fvar) lctx' insts'
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
 
   | .lam n ty body bi =>
-    results := results ++ (← findAnalyticPatterns ty lctx insts)
+    for r in (← findAnalyticPatterns ty lctx insts) do
+      results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let lctx' ← getLCtx
       let insts' ← getLocalInstances
       findAnalyticPatterns (body.instantiate1 fvar) lctx' insts'
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
 
   | .letE n ty val body _ =>
-    results := results ++ (← findAnalyticPatterns ty lctx insts)
-    results := results ++ (← findAnalyticPatterns val lctx insts)
+    for r in (← findAnalyticPatterns ty lctx insts) do
+      results := results.push r
+    for r in (← findAnalyticPatterns val lctx insts) do
+      results := results.push r
     let bodyResults ← withLetDecl n ty val fun fvar => do
       let lctx' ← getLCtx
       let insts' ← getLocalInstances
       findAnalyticPatterns (body.instantiate1 fvar) lctx' insts'
-    results := results ++ bodyResults
+    for r in bodyResults do
+      results := results.push r
 
   | .app f a =>
-    results := results ++ (← findAnalyticPatterns f lctx insts)
-    results := results ++ (← findAnalyticPatterns a lctx insts)
+    for r in (← findAnalyticPatterns f lctx insts) do
+      results := results.push r
+    for r in (← findAnalyticPatterns a lctx insts) do
+      results := results.push r
 
   | .mdata _ inner =>
-    results := results ++ (← findAnalyticPatterns inner lctx insts)
+    for r in (← findAnalyticPatterns inner lctx insts) do
+      results := results.push r
 
   | .proj _ _ inner =>
-    results := results ++ (← findAnalyticPatterns inner lctx insts)
+    for r in (← findAnalyticPatterns inner lctx insts) do
+      results := results.push r
 
   | _ => pure ()
 
@@ -376,10 +387,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       let mut issues := #[]
       for fvar in fvars do
         let ldecl ← fvar.fvarId!.getDecl
-        issues := issues ++ (← findAnalyticPatterns ldecl.type fullLCtx fullInsts)
-      issues := issues ++ (← findAnalyticPatterns body fullLCtx fullInsts)
+        for r in (← findAnalyticPatterns ldecl.type fullLCtx fullInsts) do
+          issues := issues.push r
+      for r in (← findAnalyticPatterns body fullLCtx fullInsts) do
+        issues := issues.push r
       return issues
-  allIssues := allIssues ++ typeIssues
+  for r in typeIssues do
+    allIssues := allIssues.push r
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
@@ -393,10 +407,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let mut issues := #[]
           for fvar in fvars do
             let ldecl ← fvar.fvarId!.getDecl
-            issues := issues ++ (← findAnalyticPatterns ldecl.type fullLCtx fullInsts)
-          issues := issues ++ (← findAnalyticPatterns body fullLCtx fullInsts)
+            for r in (← findAnalyticPatterns ldecl.type fullLCtx fullInsts) do
+              issues := issues.push r
+          for r in (← findAnalyticPatterns body fullLCtx fullInsts) do
+            issues := issues.push r
           return issues
-      allIssues := allIssues ++ valueIssues
+      for r in valueIssues do
+        allIssues := allIssues.push r
 
   let dedupIssues := deduplicateIssues allIssues
 

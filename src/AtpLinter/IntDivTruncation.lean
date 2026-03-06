@@ -212,37 +212,48 @@ partial def findDivisionsCore (e : Expr) : MetaM (Array TruncDivInfo) := do
   -- Key: visit binder type BEFORE introducing later binders
   match e with
   | .app f a =>
-      results := results ++ (← findDivisionsCore f)
-      results := results ++ (← findDivisionsCore a)
+      for r in (← findDivisionsCore f) do
+        results := results.push r
+      for r in (← findDivisionsCore a) do
+        results := results.push r
 
   | .lam n ty body bi =>
       -- Visit binder type in CURRENT context
-      results := results ++ (← findDivisionsCore ty)
+      for r in (← findDivisionsCore ty) do
+        results := results.push r
       -- Then introduce the binder and recurse into body
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         findDivisionsCore (body.instantiate1 fvar)
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .forallE n ty body bi =>
       -- Visit binder type in CURRENT context
-      results := results ++ (← findDivisionsCore ty)
+      for r in (← findDivisionsCore ty) do
+        results := results.push r
       -- Then introduce the binder and recurse into body
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         findDivisionsCore (body.instantiate1 fvar)
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .letE name type value body _ =>
-      results := results ++ (← findDivisionsCore type)
-      results := results ++ (← findDivisionsCore value)
+      for r in (← findDivisionsCore type) do
+        results := results.push r
+      for r in (← findDivisionsCore value) do
+        results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         findDivisionsCore (body.instantiate1 fvar)
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .mdata _ inner =>
-      results := results ++ (← findDivisionsCore inner)
+      for r in (← findDivisionsCore inner) do
+        results := results.push r
 
   | .proj _ _ inner =>
-      results := results ++ (← findDivisionsCore inner)
+      for r in (← findDivisionsCore inner) do
+        results := results.push r
 
   | _ => pure ()
 
@@ -271,7 +282,8 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Always analyze the type (statement/specification)
   let typeTruncs ← findDivisionsCore constInfo.type
-  allTruncs := allTruncs ++ typeTruncs
+  for r in typeTruncs do
+    allTruncs := allTruncs.push r
 
   -- Only analyze value for non-Prop definitions (skip proof terms)
   -- Proof terms can be enormous and contain incidental operations
@@ -279,7 +291,8 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     let isPropType ← isProp constInfo.type
     if !isPropType then
       let valueTruncs ← findDivisionsCore value
-      allTruncs := allTruncs ++ valueTruncs
+      for r in valueTruncs do
+        allTruncs := allTruncs.push r
 
   -- Deduplicate findings
   allTruncs := deduplicateTruncations allTruncs

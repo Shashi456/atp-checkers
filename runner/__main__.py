@@ -269,50 +269,51 @@ Examples:
         print("No problems to process.")
         sys.exit(0)
 
-    def on_result(result):
-        nonlocal processed
-        processed += 1
-        stats[result.status] += 1
-
-        # Progress indicator
-        status_char = {
-            "ok": ".",
-            "findings": "F",
-            "compile_error": "E",
-            "timeout": "T",
-            "infra_error": "!",
-        }.get(result.status, "?")
-        print(status_char, end="", flush=True)
-        if processed % 50 == 0:
-            print(f" [{processed}/{total}]")
-
-        # Write result
-        with open(results_file, "a", encoding="utf-8") as f:
-            f.write(result.to_jsonl() + "\n")
-
-        # Save logs for failures (include source to prevent collisions across datasets)
-        if result.status in ("compile_error", "timeout", "infra_error"):
-            safe_source = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.source or "unknown")
-            safe_pid = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.problem_id)
-            log_file = logs_dir / f"{safe_source}_{safe_pid}_{result.status}.log"
-            with open(log_file, "w", encoding="utf-8") as f:
-                f.write(f"Problem: {result.problem_id}\n")
-                f.write(f"Source: {result.source}\n")
-                f.write(f"Status: {result.status}\n")
-                f.write(f"Duration: {result.duration_ms}ms\n")
-                f.write(f"\n--- Error ---\n")
-                f.write(result.error_message or "(no error message)")
-
     # Run
     print(f"Running linter with {args.workers} worker(s)...")
-    asyncio.run(run_batch(
-        workspace=args.workspace,
-        problems=problems,
-        toolchain=toolchain,
-        timeout=args.timeout,
-        on_result=on_result,
-        workers=args.workers,
-    ))
+    with open(results_file, "a", encoding="utf-8") as results_fh:
+        def on_result(result):
+            nonlocal processed
+            processed += 1
+            stats[result.status] += 1
+
+            # Progress indicator
+            status_char = {
+                "ok": ".",
+                "findings": "F",
+                "compile_error": "E",
+                "timeout": "T",
+                "infra_error": "!",
+            }.get(result.status, "?")
+            print(status_char, end="", flush=True)
+            if processed % 50 == 0:
+                print(f" [{processed}/{total}]")
+
+            # Write result
+            results_fh.write(result.to_jsonl() + "\n")
+            results_fh.flush()
+
+            # Save logs for failures (include source to prevent collisions across datasets)
+            if result.status in ("compile_error", "timeout", "infra_error"):
+                safe_source = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.source or "unknown")
+                safe_pid = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.problem_id)
+                log_file = logs_dir / f"{safe_source}_{safe_pid}_{result.status}.log"
+                with open(log_file, "w", encoding="utf-8") as f:
+                    f.write(f"Problem: {result.problem_id}\n")
+                    f.write(f"Source: {result.source}\n")
+                    f.write(f"Status: {result.status}\n")
+                    f.write(f"Duration: {result.duration_ms}ms\n")
+                    f.write(f"\n--- Error ---\n")
+                    f.write(result.error_message or "(no error message)")
+
+        asyncio.run(run_batch(
+            workspace=args.workspace,
+            problems=problems,
+            toolchain=toolchain,
+            timeout=args.timeout,
+            on_result=on_result,
+            workers=args.workers,
+        ))
 
     # Final summary
     print()

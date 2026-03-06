@@ -121,8 +121,10 @@ partial def findRanges (e : Expr) : MetaM (Array RangeInfo) := do
   -- Recurse with proper binder handling
   match e with
   | .app f a =>
-      results := results ++ (← findRanges f)
-      results := results ++ (← findRanges a)
+      for r in (← findRanges f) do
+        results := results.push r
+      for r in (← findRanges a) do
+        results := results.push r
 
   | .lam .. =>
       -- Use lambdaTelescope to open ALL consecutive binders at once
@@ -131,11 +133,14 @@ partial def findRanges (e : Expr) : MetaM (Array RangeInfo) := do
         -- Visit types of ALL introduced binders (not just the first!)
         for x in xs do
           let ldecl ← x.fvarId!.getDecl
-          allResults := allResults ++ (← findRanges ldecl.type)
+          for r in (← findRanges ldecl.type) do
+            allResults := allResults.push r
         -- Visit the body
-        allResults := allResults ++ (← findRanges innerBody)
+        for r in (← findRanges innerBody) do
+          allResults := allResults.push r
         pure allResults
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .forallE .. =>
       -- Use forallTelescope to open ALL consecutive binders at once
@@ -144,24 +149,32 @@ partial def findRanges (e : Expr) : MetaM (Array RangeInfo) := do
         -- Visit types of ALL introduced binders (not just the first!)
         for x in xs do
           let ldecl ← x.fvarId!.getDecl
-          allResults := allResults ++ (← findRanges ldecl.type)
+          for r in (← findRanges ldecl.type) do
+            allResults := allResults.push r
         -- Visit the body
-        allResults := allResults ++ (← findRanges innerBody)
+        for r in (← findRanges innerBody) do
+          allResults := allResults.push r
         pure allResults
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .letE name type value body _ =>
-      results := results ++ (← findRanges type)
-      results := results ++ (← findRanges value)
+      for r in (← findRanges type) do
+        results := results.push r
+      for r in (← findRanges value) do
+        results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         findRanges (body.instantiate1 fvar)
-      results := results ++ bodyResults
+      for r in bodyResults do
+        results := results.push r
 
   | .mdata _ inner =>
-      results := results ++ (← findRanges inner)
+      for r in (← findRanges inner) do
+        results := results.push r
 
   | .proj _ _ inner =>
-      results := results ++ (← findRanges inner)
+      for r in (← findRanges inner) do
+        results := results.push r
 
   | _ => pure ()
 
@@ -187,7 +200,8 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Always analyze the type (statement/specification)
   let typeRanges ← findRanges type
-  allRanges := allRanges ++ typeRanges
+  for r in typeRanges do
+    allRanges := allRanges.push r
 
   -- Only analyze value for non-Prop definitions (skip proof terms)
   -- Proof terms can be enormous and contain incidental operations
@@ -195,7 +209,8 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     let isPropType ← isProp type
     if !isPropType then
       let valueRanges ← findRanges value
-      allRanges := allRanges ++ valueRanges
+      for r in valueRanges do
+        allRanges := allRanges.push r
 
   -- Count 0-indexed ranges
   let zeroIndexed := allRanges.filter fun r =>
