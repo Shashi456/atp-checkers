@@ -7,29 +7,26 @@ This document explains what this tool can and cannot do, and why.
 
 ### 1. Undecidability of semantic correctness
 
-Determining whether a Lean formalization correctly captures a natural-language
-math statement is undecidable in general. The linter detects *syntactic patterns*
-that commonly indicate semantic errors (division by zero, natural subtraction
-underflow, vacuous hypotheses, etc.), but it cannot verify whether the
-formalization *means the right thing*.
+### 1. Undecidability and Rice-style limits
 
-A theorem statement can be syntactically clean, type-correct, and pass all
-checkers — yet still formalize the wrong problem entirely. Only human review
-or LLM-assisted semantic comparison against the natural-language source can
-catch these issues.
+Determining whether a Lean formalization correctly captures an informal mathematical statement is not something a linter can decide in general. A theorem can be type-correct, compile cleanly, and still formalize the wrong mathematics entirely.
 
-### 2. Guard analysis is local
+For program-like definitions, this is closely related to Rice's theorem: any non-trivial semantic property of what a program computes is undecidable in general. For theorem statements, the practical consequence is the same: no finite static checker can decide semantic alignment with the intended informal statement in full generality.
 
-The semantic guard prover (`assumption` → `omega` → `grind`) operates on the
-local context at each binder position. It cannot:
+The linter detects *syntactic patterns* that commonly indicate semantic errors (division by zero, natural subtraction underflow, vacuous hypotheses, etc.), but it cannot verify whether the formalization *means the right thing*.
 
-- Follow guards through helper definitions or lemmas
-- Reason about guards established by type class instances
-- Track guards across module boundaries
-- Resolve guards hidden behind `have`/`let` bindings in proof terms
 
-If a divisor `b` is guaranteed non-zero by a hypothesis buried three definitions
-deep, the linter will still flag `a / b` as unguarded.
+### 2. Guard analysis is declaration-local and checker-specific
+
+The semantic guard prover (`assumption` → `omega` → `grind`) reasons only from the declaration currently being analyzed and the hypotheses that the checker puts in scope.
+
+In practice, this means:
+- It can use local hypotheses already present in the declaration.
+- Some checkers approximate full proof-state scope by opening the full telescope first.
+- It does not inline helper definitions or lemmas, follow facts across declarations or modules, or recover arbitrary semantic facts established indirectly.
+
+If a divisor `b` is known to be non-zero only through a helper lemma proved elsewhere, the linter may still flag `a / b` as unguarded.
+
 
 ### 3. Prover timeout and incompleteness
 
@@ -78,15 +75,11 @@ certainty about whether a flagged pattern is actually dangerous:
 Neither value tells you whether the finding corresponds to a real error in the
 *intended* mathematical statement. That requires comparing against ground truth.
 
-### 6. Proof terms are not analyzed
+### 6. Proof terms are mostly skipped
 
-The linter only inspects type signatures (theorem statements), not proof terms.
-This is intentional — proof terms are enormous, auto-generated, and contain
-incidental arithmetic operations that would produce thousands of false positives.
+For `Prop`-valued declarations, the linter analyzes the statement/type and intentionally skips the proof term. For non-`Prop` definitions, it does inspect the value body.
 
-However, this means the linter cannot detect issues *within* proofs, such as
-a proof that uses `sorry` deep in a tactic block (the `axiom` checker catches
-top-level `sorry` declarations but not nested ones in all cases).
+This avoids overwhelming theorem analysis with proof noise, but it also means the linter will usually not catch issues that appear only inside proofs, such as arithmetic artifacts in tactic-generated proof terms or nested uses of `sorry` inside a proof script.
 
 ### 7. Lean version coupling
 
