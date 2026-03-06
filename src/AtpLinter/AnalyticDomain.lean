@@ -108,37 +108,11 @@ def isObviouslyNonNeg (e : Expr) : MetaM Bool := do
 
   return false
 
-/-- Check if a type is "safe" for syntactic non-zero optimization.
-    Safe types are those where numeric literals mean what they say (ℕ, ℤ, ℚ, ℝ, ℂ).
-    Unsafe types include Fin n, ZMod n where (n : Fin n) = 0. -/
-def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
-  match ty with
-  | .const ``Nat _ => true
-  | .const ``Int _ => true
-  | .const ``Rat _ => true
-  | .const name _ =>
-    let s := name.toString
-    s == "Real" || s == "Complex" || containsSubstr s "Real" || containsSubstr s "Rat"
-  | _ => false
-
-/-- Check if an expression is a syntactic positive literal (1, 2, 3, π, e, etc.)
-    Works for both Nat literals and OfNat.ofNat patterns (2 : ℝ). -/
-def isSyntacticPositiveLiteral (e : Expr) : Bool :=
-  match e with
-  -- Direct Nat literal > 0
-  | .lit (.natVal n) => n > 0
-  -- OfNat.ofNat α n inst - the literal n is in the second argument position
-  | .app (.app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n))) _ => n > 0
-  | .app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n)) => n > 0
-  -- One.one pattern
-  | .app (.app (.const ``One.one _) _) _ => true
-  | .app (.const ``One.one _) _ => true
-  | _ => false
 
 /-- Check if an expression is obviously positive (suppression heuristic) -/
 def isObviouslyPos (e : Expr) : MetaM Bool := do
   -- First check syntactic positive literals (fast, no whnf needed)
-  if isSyntacticPositiveLiteral e then return true
+  if isSyntacticNonZeroLiteral e then return true
 
   let e ← whnf e
 
@@ -195,7 +169,7 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
 /-- Prove x ≠ 0 -/
 def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
   -- Shortcut: syntactic positive literals on safe types are obviously non-zero
-  if isSyntacticPositiveLiteral x then
+  if isSyntacticNonZeroLiteral x then
     let ty ← inferType x
     if isSafeTypeForNonZeroLiteral ty then
       return some .simp

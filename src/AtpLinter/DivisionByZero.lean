@@ -28,7 +28,7 @@ import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
 open AtpLinter.SemanticGuards
-open AtpLinter (isSyntacticZero ppExprSimple)
+open AtpLinter (isSyntacticZero ppExprSimple isSyntacticNonZeroLiteral isSafeTypeForNonZeroLiteral)
 
 namespace AtpLinter.DivisionByZero
 
@@ -47,42 +47,6 @@ structure DivInfo where
   -- For deduplication
   exprHash : UInt64 := 0
   deriving Inhabited
-
-/-- Check if an expression is a syntactic non-zero literal (1, 2, 3, π, etc.)
-    Used to skip false positive warnings for divisions like `x / 2` or `log(3)`.
-    SOUNDNESS NOTE: This is safe for ℕ, ℤ, ℚ, ℝ, ℂ but NOT for Fin n or ZMod n
-    where e.g. (2 : Fin 2) = 0. We only apply this optimization for "safe" types. -/
-def isSyntacticNonZeroLiteral (e : Expr) : Bool :=
-  match e with
-  -- Direct Nat literal > 0
-  | .lit (.natVal n) => n > 0
-  -- OfNat.ofNat α n inst - the literal n is in the second argument position
-  -- Structure: app (app (app (const OfNat.ofNat) α) (lit n)) inst
-  | .app (.app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n))) _ => n > 0
-  -- Also handle 2-arg version
-  | .app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n)) => n > 0
-  -- One.one pattern
-  | .app (.app (.const ``One.one _) _) _ => true
-  | .app (.const ``One.one _) _ => true
-  | _ => false
-
-/-- Simple substring check -/
-private def strContains (haystack : String) (needle : String) : Bool :=
-  (haystack.splitOn needle).length > 1
-
-/-- Check if a type is "safe" for syntactic non-zero optimization.
-    Safe types are those where numeric literals mean what they say (ℕ, ℤ, ℚ, ℝ, ℂ).
-    Unsafe types include Fin n, ZMod n where (n : Fin n) = 0. -/
-def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
-  match ty with
-  | .const ``Nat _ => true
-  | .const ``Int _ => true
-  | .const ``Rat _ => true
-  -- For Real, Complex, etc. we check by name string since they're in Mathlib
-  | .const name _ =>
-    let s := name.toString
-    s == "Real" || s == "Complex" || strContains s "Real" || strContains s "Rat"
-  | _ => false
 
 /-- Check divisor guard using semantic prover -/
 def checkDivisorGuard (divisor : Expr) (lctx : LocalContext) (localInsts : LocalInstances) : MetaM (Option String) := do

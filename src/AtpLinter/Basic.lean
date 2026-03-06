@@ -157,6 +157,32 @@ def isSyntacticZero (e : Expr) : Bool :=
     else
       false
 
+/-- Check if an expression is a syntactic non-zero literal (1, 2, 3, etc.)
+    Used to skip false positive warnings for divisions like `x / 2` or `(2 : Rat)⁻¹`.
+    SOUNDNESS NOTE: This is safe for ℕ, ℤ, ℚ, ℝ, ℂ but NOT for Fin n or ZMod n
+    where e.g. (2 : Fin 2) = 0. Pair with `isSafeTypeForNonZeroLiteral`. -/
+def isSyntacticNonZeroLiteral (e : Expr) : Bool :=
+  match e with
+  | .lit (.natVal n) => n > 0
+  | .app (.app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n))) _ => n > 0
+  | .app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n)) => n > 0
+  | .app (.app (.const ``One.one _) _) _ => true
+  | .app (.const ``One.one _) _ => true
+  | _ => false
+
+/-- Check if a type is "safe" for syntactic non-zero optimization.
+    Safe types are those where numeric literals mean what they say (ℕ, ℤ, ℚ, ℝ, ℂ).
+    Unsafe types include Fin n, ZMod n where (n : Fin n) = 0. -/
+def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
+  match ty with
+  | .const ``Nat _ => true
+  | .const ``Int _ => true
+  | .const ``Rat _ => true
+  | .const name _ =>
+    let s := name.toString
+    s == "Real" || s == "Complex" || containsSubstr s "Real" || containsSubstr s "Rat"
+  | _ => false
+
 /-- Pretty print an expression for reporting, with fallback for bound variables -/
 def ppExprSimple (e : Expr) : MetaM String := do
   try

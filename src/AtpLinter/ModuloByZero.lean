@@ -26,36 +26,9 @@ import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
 open AtpLinter.SemanticGuards
-open AtpLinter (ppExprSimple)
+open AtpLinter (ppExprSimple isSyntacticNonZeroLiteral isSafeTypeForNonZeroLiteral)
 
 namespace AtpLinter.ModuloByZero
-
-/-- Check if an expression is a syntactic non-zero literal (1, 2, 3, etc.)
-    Used to skip false positive warnings for modulo with literal divisors. -/
-def isSyntacticNonZeroLiteral (e : Expr) : Bool :=
-  match e with
-  | .lit (.natVal n) => n > 0
-  -- OfNat.ofNat α n inst - the literal n is in the second argument position
-  | .app (.app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n))) _ => n > 0
-  | .app (.app (.const ``OfNat.ofNat _) _) (.lit (.natVal n)) => n > 0
-  | .app (.app (.const ``One.one _) _) _ => true
-  | .app (.const ``One.one _) _ => true
-  | _ => false
-
-/-- Simple substring check -/
-private def strContains (haystack : String) (needle : String) : Bool :=
-  (haystack.splitOn needle).length > 1
-
-/-- Check if a type is "safe" for syntactic non-zero optimization (ℕ, ℤ, ℚ, ℝ, ℂ). -/
-def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
-  match ty with
-  | .const ``Nat _ => true
-  | .const ``Int _ => true
-  | .const ``Rat _ => true
-  | .const name _ =>
-    let s := name.toString
-    s == "Real" || s == "Complex" || strContains s "Real" || strContains s "Rat"
-  | _ => false
 
 /-- Information about a detected modulo operation -/
 structure ModInfo where
