@@ -242,28 +242,46 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let type := constInfo.type
   let value? := constInfo.value?
 
-  -- Analyze type (statement/specification)
   let emptyLCtx : LocalContext := {}
-  let typeExps ← withLCtx emptyLCtx #[] do
-    findExponentPatterns type emptyLCtx #[]
 
-  -- Only analyze value for non-Prop definitions (skip proof terms)
-  -- Proof terms can be enormous and contain incidental operations
-  let valueExps ← match value? with
-    | some v =>
-      let isPropType ← isProp type
-      if !isPropType then
-        withLCtx emptyLCtx #[] do
-          findExponentPatterns v emptyLCtx #[]
-      else
-        pure #[]
-    | none => pure #[]
+  let mut allExps := #[]
+
+  -- Analyze the type: open ALL binders first so every hypothesis is available
+  -- for guard checking, regardless of binder order (full proof-state semantics).
+  let typeExps ← withLCtx emptyLCtx #[] do
+    forallTelescope type fun fvars body => do
+      let fullLCtx ← getLCtx
+      let fullInsts ← getLocalInstances
+      let mut exps := #[]
+      for fvar in fvars do
+        let ldecl ← fvar.fvarId!.getDecl
+        exps := exps ++ (← findExponentPatterns ldecl.type fullLCtx fullInsts)
+      exps := exps ++ (← findExponentPatterns body fullLCtx fullInsts)
+      return exps
+  allExps := allExps ++ typeExps
+
+  -- Analyze value: open all lambda binders first for full-scope guard checking.
+  -- Only analyze value for non-Prop definitions (skip proof terms).
+  if let some value := value? then
+    let isPropType ← isProp type
+    if !isPropType then
+      let valueExps ← withLCtx emptyLCtx #[] do
+        lambdaTelescope value fun fvars body => do
+          let fullLCtx ← getLCtx
+          let fullInsts ← getLocalInstances
+          let mut exps := #[]
+          for fvar in fvars do
+            let ldecl ← fvar.fvarId!.getDecl
+            exps := exps ++ (← findExponentPatterns ldecl.type fullLCtx fullInsts)
+          exps := exps ++ (← findExponentPatterns body fullLCtx fullInsts)
+          return exps
+      allExps := allExps ++ valueExps
 
   -- R3 fix: Simplified filter (no more zeroExponent case)
-  let allExps := (typeExps ++ valueExps).filter fun exp =>
+  let filteredExps := allExps.filter fun exp =>
     exp.guardEvidence.isNone
 
-  let exponents := deduplicateExponents allExps
+  let exponents := deduplicateExponents filteredExps
 
   return {
     declName := declName

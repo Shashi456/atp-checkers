@@ -108,6 +108,19 @@ def isObviouslyNonNeg (e : Expr) : MetaM Bool := do
 
   return false
 
+/-- Check if a type is "safe" for syntactic non-zero optimization.
+    Safe types are those where numeric literals mean what they say (ℕ, ℤ, ℚ, ℝ, ℂ).
+    Unsafe types include Fin n, ZMod n where (n : Fin n) = 0. -/
+def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
+  match ty with
+  | .const ``Nat _ => true
+  | .const ``Int _ => true
+  | .const ``Rat _ => true
+  | .const name _ =>
+    let s := name.toString
+    s == "Real" || s == "Complex" || containsSubstr s "Real" || containsSubstr s "Rat"
+  | _ => false
+
 /-- Check if an expression is a syntactic positive literal (1, 2, 3, π, e, etc.)
     Works for both Nat literals and OfNat.ofNat patterns (2 : ℝ). -/
 def isSyntacticPositiveLiteral (e : Expr) : Bool :=
@@ -181,6 +194,12 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
 
 /-- Prove x ≠ 0 -/
 def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
+  -- Shortcut: syntactic positive literals on safe types are obviously non-zero
+  if isSyntacticPositiveLiteral x then
+    let ty ← inferType x
+    if isSafeTypeForNonZeroLiteral ty then
+      return some .simp
+
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
   withSnapshot snap do
     let ty ← inferType x
@@ -383,24 +402,42 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   let emptyLCtx : LocalContext := {}
 
-  -- Analyze type (statement/specification)
+  let mut allIssues := #[]
+
+  -- Analyze the type: open ALL binders first so every hypothesis is available
+  -- for guard checking, regardless of binder order (full proof-state semantics).
   let typeIssues ← withLCtx emptyLCtx #[] do
-    findAnalyticPatterns type emptyLCtx #[]
+    forallTelescope type fun fvars body => do
+      let fullLCtx ← getLCtx
+      let fullInsts ← getLocalInstances
+      let mut issues := #[]
+      for fvar in fvars do
+        let ldecl ← fvar.fvarId!.getDecl
+        issues := issues ++ (← findAnalyticPatterns ldecl.type fullLCtx fullInsts)
+      issues := issues ++ (← findAnalyticPatterns body fullLCtx fullInsts)
+      return issues
+  allIssues := allIssues ++ typeIssues
 
-  -- Only analyze value for non-Prop definitions (skip proof terms)
-  let valueIssues ← match value? with
-    | some v =>
-      let isPropType ← isProp type
-      if !isPropType then
-        withLCtx emptyLCtx #[] do
-          findAnalyticPatterns v emptyLCtx #[]
-      else
-        pure #[]
-    | none => pure #[]
+  -- Analyze value: open all lambda binders first for full-scope guard checking.
+  -- Only analyze value for non-Prop definitions (skip proof terms).
+  if let some value := value? then
+    let isPropType ← isProp type
+    if !isPropType then
+      let valueIssues ← withLCtx emptyLCtx #[] do
+        lambdaTelescope value fun fvars body => do
+          let fullLCtx ← getLCtx
+          let fullInsts ← getLocalInstances
+          let mut issues := #[]
+          for fvar in fvars do
+            let ldecl ← fvar.fvarId!.getDecl
+            issues := issues ++ (← findAnalyticPatterns ldecl.type fullLCtx fullInsts)
+          issues := issues ++ (← findAnalyticPatterns body fullLCtx fullInsts)
+          return issues
+      allIssues := allIssues ++ valueIssues
 
-  let allIssues := deduplicateIssues (typeIssues ++ valueIssues)
+  let dedupIssues := deduplicateIssues allIssues
 
-  return { declName, issues := allIssues }
+  return { declName, issues := dedupIssues }
 
 /-- Human-readable operation description -/
 def AnalyticOp.description : AnalyticOp → String

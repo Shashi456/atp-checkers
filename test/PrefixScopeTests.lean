@@ -564,4 +564,66 @@ info: ✓ PrefixScope.toNatInStatementGuarded: No issues detected
 -/
 #guard_msgs in #check_atp toNatInStatementGuarded
 
+
+-- ============================================================
+-- Analytic Domain Scope Tests
+-- ============================================================
+
+/-!
+AnalyticDomain should use full-scope guard checking, just like Phase 1 checkers.
+A guard hypothesis introduced AFTER the binder type must still be visible.
+-/
+
+/--
+Inverse is in the type of `y`. Guard `hx : x ≠ 0` is introduced AFTER `y`,
+but with full-scope checking it IS available for guard proving.
+
+Expected: No AnalyticDomain warning.
+-/
+def invScopeGuardAfter (x : Rat) (y : { z // z = x⁻¹ }) (hx : x ≠ 0) : Rat := x
+/-- info: ✓ PrefixScope.invScopeGuardAfter: No issues detected -/
+#guard_msgs in #check_atp invScopeGuardAfter
+
+/--
+Guard is introduced BEFORE the binder type.
+
+Expected: No AnalyticDomain warning.
+-/
+def invScopeGuardBefore (x : Rat) (hx : x ≠ 0) (y : { z // z = x⁻¹ }) : Rat := x
+/-- info: ✓ PrefixScope.invScopeGuardBefore: No issues detected -/
+#guard_msgs in #check_atp invScopeGuardBefore
+
+
+-- ============================================================
+-- Exponent Truncation Scope Tests
+-- ============================================================
+
+/-!
+ExponentTruncation should use full-scope guard checking.
+A guard hypothesis introduced AFTER the binder type must still be visible.
+-/
+
+-- Need HPow Nat Int Nat instance for tests
+instance scopeHPowNatIntNat : HPow Nat Int Nat where
+  hPow a b := if b < 0 then 0 else Nat.pow a b.toNat
+
+/--
+Exponent is in the type of `y`. Guard `he : 0 ≤ e` is introduced AFTER `y`,
+but with full-scope checking it IS available for guard proving.
+
+Expected: No ExponentTruncation warning.
+-/
+def expScopeGuardAfter (a : Nat) (e : Int) (y : Fin (a ^ e)) (he : 0 ≤ e) : Nat := 0
+/-- info: ✓ PrefixScope.expScopeGuardAfter: No issues detected -/
+#guard_msgs in #check_atp expScopeGuardAfter
+
+/--
+Guard is introduced BEFORE the binder type.
+
+Expected: No ExponentTruncation warning.
+-/
+def expScopeGuardBefore (a : Nat) (e : Int) (he : 0 ≤ e) (y : Fin (a ^ e)) : Nat := 0
+/-- info: ✓ PrefixScope.expScopeGuardBefore: No issues detected -/
+#guard_msgs in #check_atp expScopeGuardBefore
+
 end PrefixScope

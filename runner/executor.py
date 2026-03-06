@@ -354,19 +354,22 @@ async def run_batch(
                 on_result(result)
         return results
     else:
-        # Parallel execution with semaphore
+        # Parallel execution with semaphore, deterministic output order
         semaphore = asyncio.Semaphore(workers)
-        results = []
-        results_lock = asyncio.Lock()
+        result_slots = [None] * len(problems)
 
         async def process_one(idx: int, problem: Problem):
             async with semaphore:
-                result = await lint_problem(workspace, problem, toolchain, timeout, row_index=idx)
-                async with results_lock:
-                    results.append(result)
-                    if on_result:
-                        on_result(result)
-                return result
+                result_slots[idx] = await lint_problem(
+                    workspace, problem, toolchain, timeout, row_index=idx
+                )
 
         await asyncio.gather(*[process_one(i, p) for i, p in enumerate(problems)])
+
+        # Emit results in dataset order
+        results = []
+        for result in result_slots:
+            results.append(result)
+            if on_result:
+                on_result(result)
         return results

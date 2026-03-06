@@ -191,9 +191,9 @@ def covAnalyticTP (x : Rat) (h : x = 0) : Rat := x⁻¹
 def covAnalyticTN (x : Rat) (h : x ≠ 0) : Rat := x⁻¹
 #cov_assert_not covAnalyticTN "Analytic Domain Totalization"
 
--- Known FP currently accepted: inverse of non-zero literal still warns.
+-- Fixed: inverse of non-zero literal on safe type is now suppressed.
 def covAnalyticFP_literal : Rat := (2 : Rat)⁻¹
-#cov_assert_has covAnalyticFP_literal "Analytic Domain Totalization"
+#cov_assert_not covAnalyticFP_literal "Analytic Domain Totalization"
 
 -- ============================================================
 -- FN-known-gap (documented limitation)

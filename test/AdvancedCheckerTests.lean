@@ -341,19 +341,9 @@ Summary: 0 error(s), 2 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp multi_inv
 
--- Inverse of obviously non-zero (like a literal)
+-- Inverse of obviously non-zero (like a literal) — suppressed on safe types
 def inv_literal : Rat := (2 : Rat)⁻¹
-/--
-info: Analysis of AdvancedChecker.inv_literal:
-──────────────────────────────────────────────────
-[WARNING] AdvancedChecker.inv_literal: Analytic Domain Totalization
-  ⁻¹(2): x⁻¹ requires x ≠ 0 (returns 0 for zero input)
-  Taxonomy: I.d - Lean Semantic Traps
-  Suggestion: Add guard hypothesis: 2 ≠ 0
-
-──────────────────────────────────────────────────
-Summary: 0 error(s), 1 warning(s), 0 info(s)
--/
+/-- info: ✓ AdvancedChecker.inv_literal: No issues detected -/
 #guard_msgs in #check_atp inv_literal
 
 -- Inverse in theorem statement
