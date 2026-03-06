@@ -5,8 +5,6 @@ This document explains what this tool can and cannot do, and why.
 
 ## Why a linter can't catch everything
 
-### 1. Undecidability of semantic correctness
-
 ### 1. Undecidability and Rice-style limits
 
 Determining whether a Lean formalization correctly captures an informal mathematical statement is not something a linter can decide in general. A theorem can be type-correct, compile cleanly, and still formalize the wrong mathematics entirely.
@@ -22,7 +20,7 @@ The semantic guard prover (`assumption` → `omega` → `grind`) reasons only fr
 
 In practice, this means:
 - It can use local hypotheses already present in the declaration.
-- Some checkers approximate full proof-state scope by opening the full telescope first.
+- All guard-checking checkers open the full binder telescope first (`forallTelescope`/`lambdaTelescope`), so every hypothesis in the declaration signature is simultaneously available regardless of binder order.
 - It does not inline helper definitions or lemmas, follow facts across declarations or modules, or recover arbitrary semantic facts established indirectly.
 
 If a divisor `b` is known to be non-zero only through a helper lemma proved elsewhere, the linter may still flag `a / b` as unguarded.
@@ -31,9 +29,9 @@ If a divisor `b` is known to be non-zero only through a helper lemma proved else
 ### 3. Prover timeout and incompleteness
 
 The `omega` tactic handles linear arithmetic over `Nat`/`Int` completely, but
-`grind` (the SMT-style fallback) is incomplete by nature. Some provable guard
-conditions will time out or fail, producing `"maybe"` confidence instead of
-`"proven"`.
+is disabled for `Real`/`Complex` types where it does not apply. The `grind`
+SMT-style fallback is incomplete by nature. Some provable guard conditions
+will time out or fail, producing `"maybe"` confidence instead of `"proven"`.
 
 The prover stack is intentionally capped with tight resource limits to keep
 per-problem latency reasonable (~1-3 seconds). Loosening these caps would catch
@@ -41,7 +39,8 @@ more cases but make batch runs impractical.
 
 ### 4. Pattern coverage is finite
 
-The linter checks 13 specific error categories. Real formalization errors extend
+The linter checks 13 semantic error categories (plus an infrastructure error
+category for internal linter failures). Real formalization errors extend
 far beyond these:
 
 - Incorrect quantifier order (`∀ x, ∃ y` vs `∃ y, ∀ x`)
@@ -101,16 +100,24 @@ mechanical errors in LLM-generated Lean formalizations:
 
 - **Natural number subtraction underflow** — the single most common error
   category in autoformalization benchmarks
-- **Division by zero** — often introduced when LLMs translate "for all x"
-  without excluding zero
+- **Division/modulo by zero** — often introduced when LLMs translate "for
+  all x" without excluding zero
 - **Vacuous hypotheses** — contradictory assumptions that make any theorem
   trivially true
 - **Literal truncation** — `1/4 = 0` in integer arithmetic, invisible in
   source code
+- **Exponent truncation** — `a^(-n)` with Nat result silently totalizes
+- **Cast-after-truncation** — `(a / b).toNat` compounds data loss
+- **Analytic domain totalization** — `sqrt`, `log`, `inv` without domain
+  guards return 0 in Mathlib
+- **Unsound axioms** — `sorry`-based or user axioms asserting unproven facts
+- **Unused binders** — quantified variables that never appear in the body
+- **Counterexample search** — exhaustive enumeration and Plausible random
+  testing to find concrete witnesses against false propositions
 
-These categories account for the majority of semantic errors in practice.
-The `"proven"` confidence level provides high-signal findings that rarely
-require manual verification.
+The first four categories account for the majority of semantic errors in
+practice. The `"proven"` confidence level provides high-signal findings
+that rarely require manual verification.
 
 ## Recommended workflow
 
