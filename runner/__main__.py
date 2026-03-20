@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import re
 import sys
@@ -145,7 +146,6 @@ Examples:
     # Load existing problem IDs if resuming
     existing_ids = set()
     if args.skip_existing and results_file.exists():
-        import json as json_module
         print(f"Loading existing results from {results_file}...")
         seen_toolchains = set()
         with open(results_file, "r", encoding="utf-8") as f:
@@ -154,14 +154,14 @@ Examples:
                 if not line:
                     continue
                 try:
-                    data = json_module.loads(line)
+                    data = json.loads(line)
                     if "problem_id" in data:
                         existing_ids.add(data["problem_id"])
                     if "provenance" in data:
                         prov = data["provenance"]
                         if "lean_toolchain" in prov:
                             seen_toolchains.add(prov["lean_toolchain"])
-                except json_module.JSONDecodeError:
+                except json.JSONDecodeError:
                     pass
         print(f"Found {len(existing_ids)} already-processed problems")
 
@@ -238,6 +238,7 @@ Examples:
 
     # Track stats
     stats = {"ok": 0, "findings": 0, "compile_error": 0, "timeout": 0, "infra_error": 0}
+    all_findings = []  # Collect all findings for summary
     processed = 0
 
     # Emit load errors as infra_error results (so totals match dataset size)
@@ -277,6 +278,9 @@ Examples:
             processed += 1
             stats[result.status] += 1
 
+            # Collect findings for summary
+            all_findings.extend(result.findings)
+
             # Progress indicator
             status_char = {
                 "ok": ".",
@@ -315,27 +319,83 @@ Examples:
             workers=args.workers,
         ))
 
-    # Final summary
+    # Build finding breakdowns
+    by_category = {}
+    by_confidence = {"proven": 0, "maybe": 0}
+    by_proved_by = {}
+    for f in all_findings:
+        # Category breakdown with confidence sub-counts
+        if f.category not in by_category:
+            by_category[f.category] = {"total": 0, "proven": 0, "maybe": 0}
+        by_category[f.category]["total"] += 1
+        by_category[f.category][f.confidence] += 1
+        # Overall confidence
+        by_confidence[f.confidence] = by_confidence.get(f.confidence, 0) + 1
+        # ProvedBy breakdown
+        key = f.proved_by or "none"
+        by_proved_by[key] = by_proved_by.get(key, 0) + 1
+
+    total_processed = total + len(load_errors)
+
+    # Build summary dict
+    summary = {
+        "dataset": dataset_source,
+        "toolchain": toolchain,
+        "total_problems": total_processed,
+        "status_counts": {
+            "ok": stats["ok"],
+            "findings": stats["findings"],
+            "compile_error": stats["compile_error"],
+            "timeout": stats["timeout"],
+            "infra_error": stats["infra_error"],
+        },
+        "total_findings": len(all_findings),
+        "confidence_counts": by_confidence,
+        "findings_by_category": dict(sorted(by_category.items(), key=lambda x: x[1]["total"], reverse=True)),
+        "proved_by_counts": dict(sorted(by_proved_by.items(), key=lambda x: x[1], reverse=True)),
+    }
+
+    # Write summary.json
+    summary_file = args.output / "summary.json"
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    # Print summary
     print()
     print()
-    print("=" * 40)
+    print("=" * 50)
     print("Summary")
-    print("=" * 40)
-    total_processed = total + len(load_errors)  # Problems run + load errors emitted
-    print(f"Total:         {total_processed}")
-    print(f"OK:            {stats['ok']}")
-    print(f"Findings:      {stats['findings']}")
-    print(f"Compile Error: {stats['compile_error']}")
-    print(f"Timeout:       {stats['timeout']}")
-    print(f"Infra Error:   {stats['infra_error']}", end="")
+    print("=" * 50)
+    print(f"Total problems:  {total_processed}")
+    print(f"  OK:            {stats['ok']}")
+    print(f"  Findings:      {stats['findings']}")
+    print(f"  Compile Error: {stats['compile_error']}")
+    print(f"  Timeout:       {stats['timeout']}")
+    print(f"  Infra Error:   {stats['infra_error']}", end="")
     if load_errors:
         print(f" ({len(load_errors)} from bad dataset lines)")
     else:
         print()
+
+    if all_findings:
+        print()
+        print(f"Total findings:  {len(all_findings)}")
+        print(f"  Proven:        {by_confidence.get('proven', 0)}")
+        print(f"  Maybe:         {by_confidence.get('maybe', 0)}")
+        print()
+        print("Findings by category:")
+        for cat, counts in sorted(by_category.items(), key=lambda x: x[1]["total"], reverse=True):
+            print(f"  {cat:<40} {counts['total']:>4}  (proven: {counts['proven']}, maybe: {counts['maybe']})")
+        print()
+        print("Proved by:")
+        for method, count in sorted(by_proved_by.items(), key=lambda x: x[1], reverse=True):
+            print(f"  {method:<20} {count:>4}")
+
     print()
-    print(f"Results written to: {results_file}")
+    print(f"Results:  {results_file}")
+    print(f"Summary:  {summary_file}")
     if stats['compile_error'] + stats['timeout'] + stats['infra_error'] > 0:
-        print(f"Logs written to: {logs_dir}/")
+        print(f"Logs:     {logs_dir}/")
 
 
 if __name__ == "__main__":
