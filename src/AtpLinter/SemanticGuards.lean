@@ -25,7 +25,6 @@ import Lean.Meta.Tactic.Assumption
 import Lean.Meta.Tactic.Simp.Main
 import Lean.Elab.Tactic.FalseOrByContra
 import Lean.Elab.Tactic.Omega
-import Lean.Meta.Tactic.Grind
 
 open Lean Meta
 
@@ -39,7 +38,6 @@ inductive ProvedBy where
   | byContra    -- Closed by falseOrByContra transformation (trivially true/false)
   | omega       -- Closed by omega tactic on linear arithmetic
   | positivity  -- Derived from positivity hypothesis (0 < x → x ≠ 0)
-  | grind       -- Closed by grind SMT-style solver
   deriving Inhabited, Repr, BEq
 
 /--
@@ -84,7 +82,7 @@ def mkZeroOf (ty : Expr) : MetaM (Option Expr) := do
   catch _ =>
     try
       -- Fallback to Zero.zero for types with Zero but not OfNat
-      let z ← mkAppOptM ``Zero.zero #[some ty, none]
+      let z ← mkAppOptM ``Zero.zero #[some ty]
       return some z
     catch _ =>
       return none
@@ -161,84 +159,17 @@ private def findPositivityHyp (d : Expr) : MetaM Bool := do
       return true
   return false
 
-/-- Grind config for guard proofs (d ≠ 0, b ≤ a, 0 ≤ x, etc.).
-    Strict caps for performance. -/
-private def grindConfigGuard : Lean.Grind.Config where
-  splits := 3
-  ematch := 2
-  gen := 3
-  instances := 50
-  canonHeartbeats := 400
-  splitMatch := false
-  splitIte := false
-  splitIndPred := false
-  splitImp := false
-  matchEqs := false
-  ext := false
-  extAll := false
-  funext := false
-  ring := true
-  ringSteps := 500
-  linarith := true
-  lia := true
-  ac := false
-  acSteps := 200
-  mbtc := false
-  verbose := false
-  trace := false
-  abstractProof := false
-
-/-- Grind config for proving False from hypotheses (vacuity checking).
-    More generous limits since vacuity detection is high-value. -/
-private def grindConfigVacuity : Lean.Grind.Config where
-  splits := 5
-  ematch := 4
-  gen := 5
-  instances := 200
-  canonHeartbeats := 800
-  splitMatch := true
-  splitIte := true
-  splitIndPred := false
-  splitImp := true
-  matchEqs := true
-  ext := false
-  extAll := false
-  funext := false
-  ring := true
-  ringSteps := 2000
-  linarith := true
-  lia := true
-  ac := true
-  acSteps := 500
-  mbtc := true
-  verbose := false
-  trace := false
-  abstractProof := false
-
-/-- Try to close `mvarId` using grind with the given config.
-    Side-effect free (restores meta state). -/
-private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) : MetaM (Option ProvedBy) := do
-  let saved ← Meta.saveState
-  try
-    let params ← Lean.Meta.Grind.mkParams config default
-    let result ← Lean.Meta.Grind.main mvarId params
-    if result.failure?.isNone then return some .grind
-    else return none
-  catch _ => return none
-  finally saved.restore
-
 /--
 Try to prove `goal` using a controlled sequence:
 1) `assumptionCore` (catches direct hypotheses)
 2) `omega` (Nat/Int linear arithmetic), by first turning the goal into `False`
    via `falseOrByContra`, then calling `Lean.Elab.Tactic.Omega.omega` on local hyps.
-3) `grind` (SMT-style solver with linear arithmetic, ring, congruence closure)
 
-Note: simp is disabled for performance - the full Mathlib simp set is too slow.
+Note: grind is not available in Lean 4.20. The v4.24+ branch adds grind as a third fallback.
 
 This function is side-effect free (restores meta state).
 -/
-def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
+def tryProve? (goal : Expr) (useOmega : Bool := true)
     : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
@@ -268,14 +199,6 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
           Lean.Elab.Tactic.Omega.omega facts gFalse
           if ← gFalse.isAssigned then
             return some .omega
-
-    -- 3) grind (when enabled, last resort — SMT-style solver)
-    if useGrind then
-      -- Need a fresh mvar since the previous one may have been partially assigned
-      let m' ← mkFreshExprMVar goal
-      let g' := m'.mvarId!
-      if let some result ← tryGrind? g' grindConfigGuard then
-        return some result
 
     return none
   catch _ =>
@@ -309,12 +232,6 @@ def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
         if ← gFalse.isAssigned then
           return some .omega
 
-    -- 3) grind only after omega fails (more powerful but slower)
-    let m' ← mkFreshExprMVar goal
-    let g' := m'.mvarId!
-    if let some result ← tryGrind? g' grindConfigVacuity then
-      return some result
-
     return none
   catch _ =>
     return none
@@ -326,9 +243,9 @@ def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
     Uses the same prover stack as guard proving but with grind enabled by default
     for maximum power. Intended for unsafety proofs when safety cannot be established. -/
 def tryProveUnsafety? (goal : Expr) (snap : LocalCtxSnapshot)
-    (useOmega : Bool := true) (useGrind : Bool := true)
+    (useOmega : Bool := true)
     : MetaM (Option ProvedBy) :=
-  withSnapshot snap (tryProve? goal (useOmega := useOmega) (useGrind := useGrind))
+  withSnapshot snap (tryProve? goal (useOmega := useOmega))
 
 /--
 Division-by-zero guard prover.
@@ -343,7 +260,7 @@ linear facts like `2 ≤ d` or structural facts like `Nat.succ n`).
 
 Side-effect free.
 -/
-def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
+def proveDivisorSafe? (d : Expr) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
     let ty ← inferType d
@@ -356,13 +273,13 @@ def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option Prov
         -- omega can derive this from order facts (0 < d, d > 0, etc.)
         try
           let g1 ← Lean.Meta.mkAppM ``Ne #[d, zero]
-          if let some how ← tryProve? g1 omegaOk useGrind then return some how
+          if let some how ← tryProve? g1 omegaOk then return some how
         catch _ => pure ()
 
         -- Also try 0 ≠ d (symmetric form)
         try
           let g2 ← Lean.Meta.mkAppM ``Ne #[zero, d]
-          if let some how ← tryProve? g2 omegaOk useGrind then return some how
+          if let some how ← tryProve? g2 omegaOk then return some how
         catch _ => pure ()
 
         -- For non-Nat/Int types (Real, Complex, etc.), check positivity hypotheses
@@ -376,11 +293,11 @@ def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option Prov
     saved.restore
 
 /-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega, optionally grind.) -/
-def proveNatSubGuard? (a b : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
+def proveNatSubGuard? (a b : Expr) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
     let goal ← Lean.Meta.mkLe b a
-    tryProve? goal (useOmega := true) (useGrind := useGrind)
+    tryProve? goal (useOmega := true)
   finally
     saved.restore
 
@@ -401,7 +318,6 @@ def ProvedBy.toString : ProvedBy → String
   | .byContra => "byContra"
   | .omega => "omega"
   | .positivity => "positivity"
-  | .grind => "grind"
 
 end SemanticGuards
 end AtpLinter

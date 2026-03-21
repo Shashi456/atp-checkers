@@ -177,10 +177,9 @@ def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
   match ty with
   | .const ``Nat _ => true
   | .const ``Int _ => true
-  | .const ``Rat _ => true
   | .const name _ =>
     let s := name.toString
-    s == "Real" || s == "Complex" || containsSubstr s "Real" || containsSubstr s "Rat"
+    s == "Rat" || s == "Real" || s == "Complex" || containsSubstr s "Real" || containsSubstr s "Rat"
   | _ => false
 
 /-- Pretty print an expression for reporting, with fallback for bound variables -/

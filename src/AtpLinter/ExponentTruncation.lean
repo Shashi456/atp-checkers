@@ -115,7 +115,7 @@ def proveDefinitelyNegative? (exp : Expr) : MetaM (Option ProvedBy) := do
       -- Try to prove exp < 0
       let zero := Lean.mkIntLit 0
       let goal ← Lean.Meta.mkLt exp zero
-      tryProve? goal (useOmega := true) (useGrind := true)
+      tryProve? goal (useOmega := true)
     else
       return none
   catch _ =>

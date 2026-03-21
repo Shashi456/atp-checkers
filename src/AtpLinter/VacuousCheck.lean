@@ -117,7 +117,7 @@ def checkDomainEmpty? (ty : Expr) : MetaM (Option String) := do
         let result ← withLocalDeclD `_x baseTy fun x => do
           let instantiated := body.instantiate1 x
           let negGoal ← mkAppM ``Not #[instantiated]
-          tryProve? negGoal (useOmega := true) (useGrind := true)
+          tryProve? negGoal (useOmega := true)
         if result.isSome then
           return some "subtype predicate is never satisfied"
     | _ => pure ()
