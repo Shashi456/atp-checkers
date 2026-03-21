@@ -11,7 +11,6 @@ import Lean.Meta.AppBuilder
 import Lean.Meta.Tactic.Assumption
 import Lean.Elab.Tactic.FalseOrByContra
 import Lean.Elab.Tactic.Omega
-import Lean.Meta.Tactic.Grind
 import AtpLinter.GuardFacts
 import Mathlib.Tactic.Positivity
 import Mathlib.Algebra.CharZero.Defs
@@ -30,7 +29,6 @@ inductive ProvedBy where
   | byContra    -- Closed by falseOrByContra transformation (trivially true/false)
   | omega       -- Closed by omega tactic on linear arithmetic
   | positivity  -- Derived from positivity hypothesis (0 < x → x ≠ 0)
-  | grind       -- Closed by grind SMT-style solver
   deriving Inhabited, Repr, BEq
 
 /--
@@ -44,73 +42,6 @@ structure LocalCtxSnapshot where
 /-- Run `k` under a specific local context/instances snapshot. -/
 def withSnapshot (snap : LocalCtxSnapshot) (k : MetaM α) : MetaM α :=
   Meta.withLCtx snap.lctx snap.insts k
-
-/-- Grind config for guard proofs (d ≠ 0, b ≤ a, 0 ≤ x, etc.).
-    Strict caps for performance. -/
-private def grindConfigGuard : Lean.Grind.Config where
-  splits := 3
-  ematch := 2
-  gen := 3
-  instances := 50
-  canonHeartbeats := 400
-  splitMatch := false
-  splitIte := false
-  splitIndPred := false
-  splitImp := false
-  matchEqs := false
-  ext := false
-  extAll := false
-  funext := false
-  ring := true
-  ringSteps := 500
-  linarith := true
-  lia := true
-  ac := false
-  acSteps := 200
-  mbtc := false
-  verbose := false
-  trace := false
-  abstractProof := false
-
-/-- Grind config for proving False from hypotheses (vacuity checking).
-    More generous limits since vacuity detection is high-value. -/
-private def grindConfigVacuity : Lean.Grind.Config where
-  splits := 5
-  ematch := 4
-  gen := 5
-  instances := 200
-  canonHeartbeats := 800
-  splitMatch := true
-  splitIte := true
-  splitIndPred := false
-  splitImp := true
-  matchEqs := true
-  ext := false
-  extAll := false
-  funext := false
-  ring := true
-  ringSteps := 2000
-  linarith := true
-  lia := true
-  ac := true
-  acSteps := 500
-  mbtc := true
-  verbose := false
-  trace := false
-  abstractProof := false
-
-/-- Try to close `mvarId` using grind with the given config.
-    Side-effect free (restores meta state). -/
-private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) :
-    MetaM (Option ProvedBy) := do
-  let saved ← Meta.saveState
-  try
-    let params ← Lean.Meta.Grind.mkParams config default
-    let result ← Lean.Meta.Grind.main mvarId params
-    if result.failure?.isNone then return some .grind
-    else return none
-  catch _ => return none
-  finally saved.restore
 
 private def simplifyOrFalseFact? (fact : Expr) : MetaM (Option Expr) := do
   let ty ← whnf (← inferType fact)
@@ -149,14 +80,16 @@ Try to prove `goal` using a controlled sequence:
 1) `assumptionCore` (catches direct hypotheses)
 2) `omega` (Nat/Int linear arithmetic), by first turning the goal into `False`
    via `falseOrByContra`, then calling `Lean.Elab.Tactic.Omega.omega` on local hyps.
-3) `grind` (SMT-style solver with linear arithmetic, ring, congruence closure)
 
 Note: simp is disabled for performance - the full Mathlib simp set is too slow.
+Note: Lean 4.20 does not have the stable `grind` API used on newer branches,
+so the `useGrind` flag is accepted for call-site compatibility but ignored.
 
 This function is side-effect free (restores meta state).
 -/
 private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
     : MetaM (Option (Expr × ProvedBy)) := do
+  let _ := useGrind
   let saved ← Meta.saveState
   try
     let m ← mkFreshExprMVar goal
@@ -212,16 +145,6 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
           Lean.Elab.Tactic.Omega.omega facts gFalse
           if ← gFalse.isAssigned then
             return some ((← instantiateMVars m), ProvedBy.omega)
-
-    -- 5) grind (when enabled, last resort — SMT-style solver)
-    if useGrind then
-      -- Need a fresh mvar since the previous one may have been partially assigned
-      let m' ← mkFreshExprMVar goal
-      let g' := m'.mvarId!
-      let params ← Lean.Meta.Grind.mkParams grindConfigGuard default
-      let result ← Lean.Meta.Grind.main g' params
-      if result.failure?.isNone then
-        return some ((← instantiateMVars m'), ProvedBy.grind)
 
     return none
   catch _ =>
@@ -336,7 +259,7 @@ partial def proveStructuralNonzero? (d : Expr) (useGrind : Bool := false)
 
       return none
 
-/-- Try to prove `goal` is False from hypotheses, using omega then grind.
+/-- Try to prove `goal` is False from hypotheses, using omega.
     Used for vacuity checking where we want maximum power. -/
 def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
@@ -362,12 +285,6 @@ def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
         if ← gFalse.isAssigned then
           return some .omega
 
-    -- 3) grind only after omega fails (more powerful but slower)
-    let m' ← mkFreshExprMVar goal
-    let g' := m'.mvarId!
-    if let some result ← tryGrind? g' grindConfigVacuity then
-      return some result
-
     return none
   catch _ =>
     return none
@@ -375,11 +292,12 @@ def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
     saved.restore
 
 /-- Try to prove a dangerous condition (e.g., d = 0, a < b, x < 0).
-    Uses the same prover stack as guard proving but with grind enabled by default
-    for maximum power. Intended for unsafety proofs when safety cannot be established. -/
+    Uses the same prover stack as guard proving. The `useGrind` argument is kept
+    for source compatibility with newer Lean branches but ignored on 4.20. -/
 def tryProveUnsafety? (goal : Expr) (snap : LocalCtxSnapshot)
     (useOmega : Bool := true) (useGrind : Bool := true)
     : MetaM (Option ProvedBy) :=
+  let _ := useGrind
   withSnapshot snap (tryProve? goal (useOmega := useOmega) (useGrind := useGrind))
 
 /--
@@ -440,7 +358,7 @@ def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option Prov
   finally
     saved.restore
 
-/-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega, optionally grind.)
+/-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega.)
     Enriches the local context with derived facts (Subtype.property, Fin.isLt)
     and expanded conjunctions before proving, matching proveDivisorSafe?. -/
 def proveNatSubGuard? (a b : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
@@ -473,7 +391,6 @@ def ProvedBy.toString : ProvedBy → String
   | .byContra => "byContra"
   | .omega => "omega"
   | .positivity => "positivity"
-  | .grind => "grind"
 
 end SemanticGuards
 end AtpLinter

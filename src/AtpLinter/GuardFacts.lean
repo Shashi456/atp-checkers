@@ -10,7 +10,7 @@ import Lean
 import Lean.Meta.AppBuilder
 import AtpLinter.Basic
 import Mathlib.Data.Real.Sqrt
-import Mathlib.Analysis.Complex.Norm
+import Mathlib.Data.Complex.Norm
 
 open Lean Meta
 
@@ -308,7 +308,7 @@ def mkZeroOf (ty : Expr) : MetaM (Option Expr) := do
   catch _ =>
     try
       -- Fallback to Zero.zero for types with Zero but not OfNat.
-      let z ← mkAppOptM ``Zero.zero #[some ty, none]
+      let z ← mkAppOptM ``Zero.zero #[some ty]
       return some z
     catch _ =>
       return none

@@ -8,7 +8,7 @@
 
 import AtpLinter
 import TestAssertions
-import Mathlib.Analysis.Complex.Norm
+import Mathlib.Data.Complex.Norm
 import Mathlib.Analysis.SpecialFunctions.Complex.Log
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic

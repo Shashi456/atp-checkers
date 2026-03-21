@@ -58,7 +58,7 @@ structure DivInfo where
 /-- Check divisor guard using semantic prover -/
 def checkDivisorGuard (divisor : Expr) (lctx : LocalContext) (localInsts : LocalInstances) : MetaM (Option String) := do
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := localInsts }
-  let result ← withSnapshot snap (proveDivisorSafe? divisor (useGrind := true))
+  let result ← withSnapshot snap (proveDivisorSafe? divisor)
   match result with
   | some provedBy => return some provedBy.toString
   | none => return none

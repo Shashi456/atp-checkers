@@ -54,7 +54,7 @@ def isNatType (e : Expr) : MetaM Bool := do
 /-- Check subtraction guard using semantic prover -/
 def checkSubtractionGuard (lhs rhs : Expr) (lctx : LocalContext) (localInsts : LocalInstances) : MetaM (Option String) := do
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := localInsts }
-  let result ← withSnapshot snap (proveNatSubGuard? lhs rhs (useGrind := true))
+  let result ← withSnapshot snap (proveNatSubGuard? lhs rhs)
   match result with
   | some provedBy => return some provedBy.toString
   | none => return none

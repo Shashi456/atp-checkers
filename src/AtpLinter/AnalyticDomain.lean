@@ -159,7 +159,7 @@ def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
     | some zero =>
       let goal ← mkLE zero x
       -- omega won't help for Real; grind handles ordered-field reasoning
-      tryProve? goal (useOmega := false) (useGrind := true)
+      tryProve? goal (useOmega := false)
 
 /-- Prove 0 < x. Enriches local context with derived facts and expanded
     conjunctions before proving, matching proveDivisorSafe?. -/
@@ -176,7 +176,7 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
     | some zero =>
       let goal ← mkLT zero x
       -- omega won't help for Real; grind handles ordered-field reasoning
-      tryProve? goal (useOmega := false) (useGrind := true)
+      tryProve? goal (useOmega := false)
 
 /-- Prove x ≠ 0. Enriches local context with derived facts and expanded
     conjunctions, and tries structural nonzero closure (mul_ne_zero,
@@ -327,7 +327,7 @@ partial def findAnalyticPatterns (e : Expr) (lctx : LocalContext) (insts : Local
   -- Check for Inv.inv patterns (x⁻¹)
   -- Inv.inv : {α : Type*} → [Inv α] → α → α
   -- Only check types where Zero instance exists (otherwise proveNeZero? will fail)
-  if e.isAppOfArity ``Inv.inv 3 then
+  if e.isAppOf `Inv.inv && e.getAppNumArgs == 3 then
     let arg := e.getAppArgs[2]!
     let argTy ← inferType arg
     -- Gate: only check types where nonzero really is the correct inverse guard.
