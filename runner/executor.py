@@ -43,7 +43,14 @@ def _sanitize_id_for_lean(problem_id: str) -> str:
 
 
 def wrap_with_linter(lean_code: str) -> str:
-    """Wrap problem code with linter import and check command."""
+    """Wrap problem code with linter import and check command.
+
+    If the code ends with 'by' (common in benchmark datasets that omit the proof),
+    append 'sorry' so that '#check_atp_all' isn't parsed as a tactic.
+    """
+    stripped = lean_code.rstrip()
+    if re.search(r'\bby\s*$', stripped):
+        lean_code = stripped + "\n  sorry"
     return f"""import AtpLinter
 
 {lean_code}
