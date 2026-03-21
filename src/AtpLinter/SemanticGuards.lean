@@ -84,7 +84,7 @@ def mkZeroOf (ty : Expr) : MetaM (Option Expr) := do
   catch _ =>
     try
       -- Fallback to Zero.zero for types with Zero but not OfNat
-      let z ← mkAppOptM ``Zero.zero #[some ty]
+      let z ← mkAppOptM ``Zero.zero #[some ty, none]
       return some z
     catch _ =>
       return none
