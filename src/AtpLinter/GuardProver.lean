@@ -64,7 +64,7 @@ private def grindConfigGuard : Lean.Grind.Config where
   ring := true
   ringSteps := 500
   linarith := true
-  lia := true
+  cutsat := true
   ac := false
   acSteps := 200
   mbtc := false
@@ -91,7 +91,7 @@ private def grindConfigVacuity : Lean.Grind.Config where
   ring := true
   ringSteps := 2000
   linarith := true
-  lia := true
+  cutsat := true
   ac := true
   acSteps := 500
   mbtc := true
@@ -105,8 +105,8 @@ private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) :
     MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
-    let params ← Lean.Meta.Grind.mkParams config default
-    let result ← Lean.Meta.Grind.main mvarId params
+    let params ← Lean.Meta.Grind.mkParams config
+    let result ← Lean.Meta.Grind.main mvarId params (pure ())
     if result.failure?.isNone then return some .grind
     else return none
   catch _ => return none
@@ -218,8 +218,8 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
       -- Need a fresh mvar since the previous one may have been partially assigned
       let m' ← mkFreshExprMVar goal
       let g' := m'.mvarId!
-      let params ← Lean.Meta.Grind.mkParams grindConfigGuard default
-      let result ← Lean.Meta.Grind.main g' params
+      let params ← Lean.Meta.Grind.mkParams grindConfigGuard
+      let result ← Lean.Meta.Grind.main g' params (pure ())
       if result.failure?.isNone then
         return some ((← instantiateMVars m'), ProvedBy.grind)
 

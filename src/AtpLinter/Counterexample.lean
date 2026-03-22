@@ -293,7 +293,7 @@ def parsePlausibleOutput (lines : List String) : List Assignment × Option Strin
         else
           let valueStr := " := ".intercalate rest
           assignments := assignments ++ [{
-            name := .mkSimple nameStr.trimAscii.toString
+            name := .mkSimple nameStr.trim
             valueStr := valueStr
           }]
       | _ => pure ()  -- skip unparseable
