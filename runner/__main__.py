@@ -22,7 +22,7 @@ from .data_loader import (
 )
 from .persistent import run_batch as run_batch_persistent
 from .executor import run_batch as run_batch_subprocess
-from .parse import DEFAULT_TIMEOUT
+from .models import DEFAULT_TIMEOUT
 from .models import ParseError, LintResult, Problem, Provenance
 
 
@@ -114,12 +114,6 @@ class _ResumeState:
             self.by_proved_by[proved_by] = self.by_proved_by.get(proved_by, 0) + 1
 
 
-def _resume_key(data: dict) -> str | None:
-    problem_id = data.get("problem_id")
-    if problem_id is None:
-        return None
-    return str(problem_id)
-
 def _resolve_toolchain(args) -> str:
     workspace_toolchain = None
     toolchain_file = args.workspace / "lean-toolchain"
@@ -160,13 +154,12 @@ def _load_existing_state(results_file: Path, toolchain: str) -> _ResumeState:
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:
-                pass
                 continue
 
-            key = _resume_key(data)
-            if key is None:
+            problem_id = data.get("problem_id")
+            if problem_id is None:
                 continue
-            latest_by_key[key] = data
+            latest_by_key[str(problem_id)] = data
 
     seen_toolchains = set()
     for data in latest_by_key.values():
@@ -248,14 +241,14 @@ class _ResultTracker:
 
     def on_result(self, result: LintResult) -> None:
         self.processed += 1
-        self.stats[result.status] += 1
+        self.stats[result.status] = self.stats.get(result.status, 0) + 1
 
         for f in result.findings:
             self.total_findings += 1
             if f.category not in self.by_category:
                 self.by_category[f.category] = {"total": 0, "proven": 0, "maybe": 0}
             self.by_category[f.category]["total"] += 1
-            self.by_category[f.category][f.confidence] += 1
+            self.by_category[f.category][f.confidence] = self.by_category[f.category].get(f.confidence, 0) + 1
             self.by_confidence[f.confidence] = self.by_confidence.get(f.confidence, 0) + 1
             key = f.proved_by or "none"
             self.by_proved_by[key] = self.by_proved_by.get(key, 0) + 1

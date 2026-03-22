@@ -134,7 +134,7 @@ Each line of `results.jsonl` is a JSON object:
   "error_message": null,
   "duration_ms": 1823,
   "provenance": {
-    "lean_toolchain": "leanprover/lean4:v4.24.0",
+    "lean_toolchain": "leanprover/lean4:v4.29.0-rc6",
     "timestamp": "2026-02-23T12:42:44.125493+00:00"
   },
   "metadata": {
@@ -200,7 +200,7 @@ metadata, and structured findings that can be directly embedded in prompts.
 ```
 atp-checkers/
 ├── lakefile.lean              # Build config
-├── lean-toolchain             # Lean 4 v4.24.0
+├── lean-toolchain             # Lean 4 v4.29.0-rc6
 ├── Main.lean                  # CLI entry point
 ├── src/AtpLinter/             # 13 checker modules + core infrastructure
 ├── test/                      # 7 gating + 3 demo test suites
@@ -213,7 +213,7 @@ atp-checkers/
 
 ## Building from Source
 
-**Requirements:** Lean 4 v4.24.0, Python 3.8+
+**Requirements:** Lean 4 v4.29.0-rc6, Python 3.8+
 
 ```bash
 # Clone and build

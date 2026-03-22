@@ -13,14 +13,11 @@ import re
 import signal
 import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
-from .models import Problem, LintResult, Provenance
-from .parse import (
-    parse_lint_output,
-    has_done_sentinel,
-    make_provenance,
-    DEFAULT_TIMEOUT,
+from .models import (
+    Problem, LintResult, Provenance,
+    parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT,
 )
 
 
@@ -99,7 +96,7 @@ async def lint_problem(
             findings=[],
             error_message=f"Failed to write problem file: {e}",
             duration_ms=duration_ms,
-            provenance=_make_provenance(toolchain),
+            provenance=make_provenance(toolchain),
             metadata=problem.metadata,
         )
 
@@ -122,7 +119,7 @@ async def lint_problem(
                 findings=[],
                 error_message=f"Failed to spawn lake process: {e}",
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -153,7 +150,7 @@ async def lint_problem(
                 findings=[],
                 error_message=f"Exceeded {timeout}s timeout",
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -190,7 +187,7 @@ async def lint_problem(
                 findings=findings,  # Include any findings we did parse
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -206,7 +203,7 @@ async def lint_problem(
                 findings=[],
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
         elif proc.returncode > 0:
@@ -219,7 +216,7 @@ async def lint_problem(
                 findings=[],
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
         elif not done:
@@ -231,7 +228,7 @@ async def lint_problem(
                 findings=[],
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
         else:
@@ -242,7 +239,7 @@ async def lint_problem(
                 findings=findings,
                 error_message=None,
                 duration_ms=duration_ms,
-                provenance=_make_provenance(toolchain),
+                provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
@@ -282,16 +279,13 @@ def _cleanup_problem_artifacts(workspace: Path, file_stem: str):
                 pass
 
 
-def _make_provenance(toolchain: str) -> Provenance:
-    return make_provenance(toolchain)
-
 
 async def run_batch(
     workspace: Path,
     problems: Iterable[Problem],
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
-    on_result: Optional[callable] = None,
+    on_result: Optional[Callable] = None,
     workers: int = 1,
     collect_results: bool = True,
 ) -> list[LintResult]:

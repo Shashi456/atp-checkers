@@ -1,11 +1,25 @@
-"""Data models for the ATP checkers runner."""
+"""Data models and shared parsing helpers for the ATP checkers runner."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional, Any
 import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Optional, Tuple
 
+
+# ---------------------------------------------------------------------------
+# Sentinel constants
+# ---------------------------------------------------------------------------
+
+SENTINEL_LINT = "ATP_LINT:"
+SENTINEL_DONE = "ATP_DONE"
+
+DEFAULT_TIMEOUT = 30
+
+
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
 
 @dataclass
 class Problem:
@@ -14,16 +28,6 @@ class Problem:
     source: str
     lean_code: str
     metadata: dict = field(default_factory=dict)
-
-    @property
-    def natural_language(self) -> Optional[str]:
-        """Get natural language statement if available."""
-        return (
-            self.metadata.get("natural_language")
-            or self.metadata.get("nl_statement")
-            or self.metadata.get("informal_prefix")
-            or self.metadata.get("natural")
-        )
 
 
 @dataclass
@@ -34,8 +38,8 @@ class Finding:
     declaration: str
     message: str
     suggestion: Optional[str] = None
-    confidence: str = "maybe"           # "proven" or "maybe"
-    proved_by: Optional[str] = None     # tactic/method name
+    confidence: str = "maybe"
+    proved_by: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Finding":
@@ -73,7 +77,7 @@ class LintResult:
     error_message: Optional[str]
     duration_ms: int
     provenance: Provenance
-    metadata: dict = field(default_factory=dict)  # Preserve original metadata including NL
+    metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -108,3 +112,42 @@ class ParseError:
     line_number: int
     error: str
     raw_line: str
+
+
+# ---------------------------------------------------------------------------
+# Parsing helpers (used by both backends)
+# ---------------------------------------------------------------------------
+
+def make_provenance(toolchain: str) -> Provenance:
+    return Provenance(
+        lean_toolchain=toolchain,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def parse_lint_output(text: str) -> Tuple[list[Finding], list[str]]:
+    """Extract ATP_LINT findings and malformed-line errors from linter output."""
+    findings = []
+    parse_errors = []
+    for line in text.splitlines():
+        if line.startswith(SENTINEL_LINT):
+            json_str = line[len(SENTINEL_LINT):]
+            try:
+                findings.append(Finding.from_dict(json.loads(json_str)))
+            except json.JSONDecodeError as e:
+                parse_errors.append(f"Malformed ATP_LINT JSON: {e} in: {json_str[:100]}")
+    return findings, parse_errors
+
+
+def has_done_sentinel(text: str) -> Tuple[bool, Optional[dict]]:
+    """Check for ATP_DONE sentinel and parse its metadata."""
+    for line in text.splitlines():
+        if line.startswith(SENTINEL_DONE):
+            rest = line[len(SENTINEL_DONE):]
+            if rest.startswith(":"):
+                try:
+                    return True, json.loads(rest[1:])
+                except json.JSONDecodeError:
+                    return True, None
+            return True, None
+    return False, None

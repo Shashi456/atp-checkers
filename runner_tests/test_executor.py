@@ -4,14 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from runner.executor import (
-    has_done_sentinel,
-    lint_problem,
-    parse_lint_output,
-    run_batch,
-    wrap_with_linter,
+from runner.executor import lint_problem, run_batch, wrap_with_linter
+from runner.models import (
+    LintResult, Problem, Provenance,
+    parse_lint_output, has_done_sentinel,
 )
-from runner.models import LintResult, Problem, Provenance
 
 
 def _mk_result(problem: Problem) -> LintResult:

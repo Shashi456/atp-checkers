@@ -15,10 +15,10 @@ import re
 import signal
 import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .models import Problem, LintResult
-from .parse import parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT
+from .models import parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +322,7 @@ class LeanRepl:
             if restart_err:
                 msg += f"\n\n{restart_err}"
             return _make_result(problem, "timeout", self.toolchain, start, error_message=msg)
-        except (ReplProtocolError, Exception) as exc:
+        except Exception as exc:
             restart_err = await self._restart()
             msg = f"REPL error: {exc}"
             if restart_err:
@@ -496,7 +496,7 @@ async def run_batch(
     problems: Iterable[Problem],
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
-    on_result: Optional[callable] = None,
+    on_result: Optional[Callable] = None,
     workers: int = 1,
     collect_results: bool = True,
 ) -> list[LintResult]:
@@ -506,7 +506,7 @@ async def run_batch(
     Uses a bounded window to avoid creating one coroutine per problem.
     """
     pool = _Pool(workspace, toolchain, timeout, workers)
-    results: list[LintResult] = [] if collect_results else []
+    results: list[LintResult] = []
 
     try:
         await pool.start()

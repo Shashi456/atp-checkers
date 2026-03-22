@@ -402,13 +402,10 @@ def iter_hf(
     try:
         import datasets as ds_lib
     except ImportError:
-        import sys
-        print(
-            "Error: HuggingFace datasets library required for --format hf.\n"
-            "Install with: pip install datasets",
-            file=sys.stderr,
+        raise ValueError(
+            "HuggingFace datasets library required for --format hf. "
+            "Install with: pip install datasets"
         )
-        sys.exit(1)
 
     if source is None:
         source = repo_id.replace("/", "_")
@@ -420,18 +417,13 @@ def iter_hf(
         try:
             split_names = list(ds_lib.get_dataset_split_names(repo_id, trust_remote_code=True))
         except Exception as e:
-            import sys
-            print(
-                f"Error loading HuggingFace split metadata for {repo_id!r}: {e}\n"
-                "Specify --split explicitly if metadata lookup is unavailable.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            raise ValueError(
+                f"Error loading HuggingFace split metadata for {repo_id!r}: {e}. "
+                "Specify --split explicitly."
+            ) from e
 
         if not split_names:
-            import sys
-            print(f"Error: No splits found in HuggingFace dataset {repo_id!r}", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError(f"No splits found in HuggingFace dataset {repo_id!r}")
 
         effective_split = "test" if "test" in split_names else split_names[0]
         log.info("Auto-selected split: %s", effective_split)
@@ -444,12 +436,9 @@ def iter_hf(
             trust_remote_code=True,
         )
     except Exception as e:
-        import sys
-        print(
-            f"Error loading HuggingFace dataset {repo_id!r} split {effective_split!r}: {e}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        raise ValueError(
+            f"Error loading HuggingFace dataset {repo_id!r} split {effective_split!r}: {e}"
+        ) from e
 
     print(f"Streaming rows from {repo_id} (split={effective_split})")
 
