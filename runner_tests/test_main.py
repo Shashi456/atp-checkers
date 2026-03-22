@@ -37,6 +37,8 @@ class ResumeStateTests(unittest.TestCase):
                     "problem_id": "p2",
                     "source": "src",
                     "status": "findings",
+                    "compile_error": True,
+                    "compile_error_message": "bad syntax",
                     "findings": [
                         {
                             "category": "Potential Division by Zero",
@@ -68,6 +70,8 @@ class ResumeStateTests(unittest.TestCase):
         self.assertEqual(1, state.stats["ok"])
         self.assertEqual(1, state.stats["findings"])
         self.assertEqual(1, state.stats["infra_error"])
+        self.assertEqual(1, state.compile_errors)
+        self.assertEqual(1, state.compile_errors_with_findings)
         self.assertEqual(1, state.total_findings)
         self.assertEqual(1, state.by_category["Potential Division by Zero"]["total"])
         self.assertEqual(1, state.by_confidence["maybe"])
@@ -92,6 +96,8 @@ class ResumeStateTests(unittest.TestCase):
                     "problem_id": "p1",
                     "source": "src",
                     "status": "findings",
+                    "compile_error": True,
+                    "compile_error_message": "bad syntax",
                     "findings": [
                         {
                             "category": "Unused Quantified Variable",
@@ -142,6 +148,8 @@ class ResumeStateTests(unittest.TestCase):
         self.assertEqual(0, state.stats["ok"])
         self.assertEqual(1, state.stats["findings"])
         self.assertEqual(1, state.stats["infra_error"])
+        self.assertEqual(1, state.compile_errors)
+        self.assertEqual(1, state.compile_errors_with_findings)
         self.assertEqual(1, state.total_findings)
         self.assertEqual(1, state.by_confidence["proven"])
         self.assertEqual(1, state.by_proved_by["simp"])
@@ -154,6 +162,8 @@ class ResumeStateTests(unittest.TestCase):
             state.processed = 3
             state.stats["ok"] = 2
             state.stats["infra_error"] = 1
+            state.compile_errors = 2
+            state.compile_errors_with_findings = 1
             state.total_findings = 4
             state.by_confidence["maybe"] = 4
             tracker = _ResultTracker(10, results_fh, logs_dir, resume_state=state)
@@ -161,6 +171,8 @@ class ResumeStateTests(unittest.TestCase):
         self.assertEqual(3, tracker.processed)
         self.assertEqual(2, tracker.stats["ok"])
         self.assertEqual(1, tracker.stats["infra_error"])
+        self.assertEqual(2, tracker.compile_errors)
+        self.assertEqual(1, tracker.compile_errors_with_findings)
         self.assertEqual(4, tracker.total_findings)
         self.assertEqual(4, tracker.by_confidence["maybe"])
 

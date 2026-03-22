@@ -65,9 +65,9 @@ Examples:
     parser.add_argument("--skip-existing", action="store_true",
         help="Skip problems already in results.jsonl (for resuming interrupted runs)")
     parser.add_argument("--backend", type=str, choices=["persistent", "subprocess"],
-        default="persistent",
-        help="Execution backend (default: persistent REPL, requires `lake build repl`; "
-             "subprocess: fallback/debug, spawns per-problem)")
+        default="subprocess",
+        help="Execution backend (default: subprocess, resolves lake env once then invokes lean directly; "
+             "persistent: keeps REPL processes alive, requires `lake build repl`)")
     return parser
 
 
@@ -84,6 +84,8 @@ class _ResumeState:
     stats: dict[str, int] = field(default_factory=lambda: {
         "ok": 0, "findings": 0, "compile_error": 0, "timeout": 0, "infra_error": 0,
     })
+    compile_errors: int = 0
+    compile_errors_with_findings: int = 0
     total_findings: int = 0
     by_category: dict[str, dict[str, int]] = field(default_factory=dict)
     by_confidence: dict[str, int] = field(default_factory=lambda: {"proven": 0, "maybe": 0})
@@ -94,6 +96,11 @@ class _ResumeState:
         status = data.get("status")
         if status in self.stats:
             self.stats[status] += 1
+        compile_error = bool(data.get("compile_error", status == "compile_error"))
+        if compile_error:
+            self.compile_errors += 1
+            if data.get("findings"):
+                self.compile_errors_with_findings += 1
 
         problem_id = str(data.get("problem_id", ""))
         if problem_id.startswith("_load_error_line_"):
@@ -234,6 +241,8 @@ class _ResultTracker:
         self.logs_dir = logs_dir
         self.processed = resume_state.processed
         self.stats = dict(resume_state.stats)
+        self.compile_errors = resume_state.compile_errors
+        self.compile_errors_with_findings = resume_state.compile_errors_with_findings
         self.total_findings = resume_state.total_findings
         self.by_category = {k: dict(v) for k, v in resume_state.by_category.items()}
         self.by_confidence = dict(resume_state.by_confidence)
@@ -242,6 +251,10 @@ class _ResultTracker:
     def on_result(self, result: LintResult) -> None:
         self.processed += 1
         self.stats[result.status] = self.stats.get(result.status, 0) + 1
+        if result.compile_error:
+            self.compile_errors += 1
+            if result.findings:
+                self.compile_errors_with_findings += 1
 
         for f in result.findings:
             self.total_findings += 1
@@ -268,14 +281,25 @@ class _ResultTracker:
         self.results_fh.flush()
 
         # Log failures
-        if result.status in ("compile_error", "timeout", "infra_error"):
+        if result.status in ("compile_error", "timeout", "infra_error") or result.compile_error:
             safe_source = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.source or "unknown")
             safe_pid = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.problem_id)
-            log_file = self.logs_dir / f"{safe_source}_{safe_pid}_{result.status}.log"
+            suffix = result.status
+            if result.compile_error and result.status in ("ok", "findings"):
+                suffix = "compile_error"
+            log_file = self.logs_dir / f"{safe_source}_{safe_pid}_{suffix}.log"
             with open(log_file, "w", encoding="utf-8") as f:
-                f.write(f"Problem: {result.problem_id}\nSource: {result.source}\n"
-                        f"Status: {result.status}\nDuration: {result.duration_ms}ms\n"
-                        f"\n--- Error ---\n{result.error_message or '(no error message)'}")
+                f.write(
+                    f"Problem: {result.problem_id}\n"
+                    f"Source: {result.source}\n"
+                    f"Status: {result.status}\n"
+                    f"Compile Error: {result.compile_error}\n"
+                    f"Duration: {result.duration_ms}ms\n"
+                )
+                if result.compile_error_message is not None:
+                    f.write(f"\n--- Compile Error ---\n{result.compile_error_message}")
+                if result.error_message is not None:
+                    f.write(f"\n\n--- Error ---\n{result.error_message}")
 
     def summary_dict(self, dataset_source: str, toolchain: str) -> dict:
         return {
@@ -283,6 +307,12 @@ class _ResultTracker:
             "toolchain": toolchain,
             "total_problems": self.total_hint if self.total_hint is not None else self.processed,
             "status_counts": dict(self.stats),
+            "compile_error_counts": {
+                "total": self.compile_errors,
+                "with_findings": self.compile_errors_with_findings,
+                "without_findings": self.compile_errors - self.compile_errors_with_findings,
+                "compile_only": self.stats["compile_error"],
+            },
             "total_findings": self.total_findings,
             "confidence_counts": self.by_confidence,
             "findings_by_category": dict(sorted(self.by_category.items(), key=lambda x: x[1]["total"], reverse=True)),
@@ -300,9 +330,13 @@ def _print_summary(tracker: _ResultTracker) -> None:
     print(f"Total problems:  {total_processed}")
     print(f"  OK:            {tracker.stats['ok']}")
     print(f"  Findings:      {tracker.stats['findings']}")
-    print(f"  Compile Error: {tracker.stats['compile_error']}")
+    print(f"  Compile Only:  {tracker.stats['compile_error']}")
     print(f"  Timeout:       {tracker.stats['timeout']}")
     print(f"  Infra Error:   {tracker.stats['infra_error']}")
+    print(f"  Compile Flag:  {tracker.compile_errors}")
+    if tracker.compile_errors:
+        print(f"    With Findings:    {tracker.compile_errors_with_findings}")
+        print(f"    Without Findings: {tracker.compile_errors - tracker.compile_errors_with_findings}")
 
     if tracker.total_findings:
         print()
@@ -431,7 +465,7 @@ def main():
     print()
     print(f"Results:  {results_file}")
     print(f"Summary:  {summary_file}")
-    if tracker.stats["compile_error"] + tracker.stats["timeout"] + tracker.stats["infra_error"] > 0:
+    if tracker.compile_errors + tracker.stats["timeout"] + tracker.stats["infra_error"] > 0:
         print(f"Logs:     {logs_dir}/")
 
 

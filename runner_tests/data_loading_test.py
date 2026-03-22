@@ -87,6 +87,23 @@ class TestResolveRow(unittest.TestCase):
         self.assertEqual("formal", r.strategy)
         self.assertEqual("NL", r.natural_language)
 
+    def test_numina_uuid_becomes_id(self):
+        row = {"uuid": "u-123", "formal_statement": "import Mathlib\ntheorem t : True := by trivial"}
+        r = resolve_row(row)
+        self.assertEqual("u-123", r.id)
+        self.assertEqual("formal_statement", r.strategy)
+
+    def test_formalmath_autoformalization_schema(self):
+        row = {
+            "theorem_names": "algebra_1",
+            "autoformalization": "import Mathlib\ntheorem t : True := by trivial",
+            "refined_statement": "Prove true.",
+        }
+        r = resolve_row(row)
+        self.assertEqual("algebra_1", r.id)
+        self.assertEqual("autoformalization", r.strategy)
+        self.assertEqual("Prove true.", r.natural_language)
+
     def test_header_prepended(self):
         row = {"id": "h1", "formal": "theorem t := sorry"}
         r = resolve_row(row, header="import Mathlib\n")

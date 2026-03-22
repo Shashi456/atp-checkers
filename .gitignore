@@ -6,10 +6,13 @@
 
 # Temporary problem files
 _Problem_*.lean
+.atp_import_cache/
+.atp-test-cache/
 
 # Runner outputs
 out/
 results/
+datasets/generated/
 
 # Python
 __pycache__/

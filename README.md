@@ -137,6 +137,8 @@ Each line of `results.jsonl` is a JSON object:
     "lean_toolchain": "leanprover/lean4:v4.29.0-rc6",
     "timestamp": "2026-02-23T12:42:44.125493+00:00"
   },
+  "compile_error": false,
+  "compile_error_message": null,
   "metadata": {
     "natural_language": "For all natural numbers a and b, a/b is natural."
   }
@@ -149,9 +151,18 @@ Each line of `results.jsonl` is a JSON object:
 |--------|---------|
 | `ok` | No findings — code passed all checks |
 | `findings` | One or more issues detected |
-| `compile_error` | Lean code failed to compile |
+| `compile_error` | Lean code failed to compile before the linter completed |
 | `timeout` | Problem exceeded the time limit |
 | `infra_error` | Runner infrastructure failure |
+
+`compile_error` is also tracked additively in each result row via:
+
+- `compile_error`: whether Lean reported compile errors
+- `compile_error_message`: captured compile diagnostics
+
+This means a row can have `status = "findings"` and `compile_error = true`
+when the linter completed and emitted findings despite compile errors elsewhere
+in the file.
 
 ### Confidence Model
 

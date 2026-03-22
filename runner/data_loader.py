@@ -12,7 +12,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from typing import Iterator, Optional, Tuple, cast
 
 from .models import Problem, ParseError
 
@@ -36,7 +36,7 @@ class ResolvedRow:
 
 
 # Ordered candidate lists
-_ID_KEYS = ("id", "name", "theorem_name", "problem_id")
+_ID_KEYS = ("id", "name", "theorem_name", "problem_id", "uuid", "theorem_names")
 
 # Each entry: tuple of field names.
 #   len == 1  →  use that field as-is
@@ -46,11 +46,19 @@ _CODE_STRATEGIES: list[tuple[str, ...]] = [
     ("lean4_code",),
     ("header", "formal_statement"),
     ("lean4_src_header", "lean4_formalization"),
+    ("autoformalization",),
     ("formal_statement",),
     ("formal",),
 ]
 
-_NL_KEYS = ("natural_language", "nl_statement", "informal_prefix", "natural")
+_NL_KEYS = (
+    "natural_language",
+    "nl_statement",
+    "informal_prefix",
+    "natural",
+    "refined_statement",
+    "problem",
+)
 
 
 def resolve_row(
@@ -110,6 +118,8 @@ def resolve_row(
             f"Row {problem_id}: no code field found. "
             f"Available keys: {list(row.keys())}"
         )
+    if strategy_label is None:
+        raise ValueError(f"Row {problem_id}: matched code without a strategy label")
 
     # --- Prepend header ---
     if header:
@@ -130,7 +140,7 @@ def resolve_row(
         id=problem_id,
         lean_code=lean_code,
         natural_language=natural_language,
-        strategy=strategy_label,
+        strategy=cast(str, strategy_label),
         metadata=metadata,
     )
 

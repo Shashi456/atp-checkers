@@ -9,16 +9,25 @@ Requires `lake build repl` in the workspace.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
-import re
 import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from .executor import lint_problem as lint_problem_subprocess
+from .executor import run_batch as run_batch_subprocess
 from .models import Problem, LintResult
 from .models import parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT
+from .preamble import build_env_cmd as _build_env_cmd
+from .preamble import build_problem_cmd as _build_problem_cmd
+from .preamble import split_preamble as _split_preamble
+
+
+_SUBPROCESS_FALLBACK_ROWS = itertools.count()
 
 
 # ---------------------------------------------------------------------------
@@ -30,67 +39,6 @@ class ReplTimeoutError(TimeoutError):
 
 class ReplProtocolError(RuntimeError):
     pass
-
-
-# ---------------------------------------------------------------------------
-# Preamble helpers
-# ---------------------------------------------------------------------------
-
-def _split_preamble(lean_code: str) -> tuple[tuple[str, ...], str]:
-    """Split leading import/open/set_option lines from the body."""
-    preamble: list[str] = []
-    body_lines: list[str] = []
-    scanning = True
-    block_comment_depth = 0
-
-    for line in lean_code.splitlines(keepends=True):
-        stripped = line.strip()
-
-        if scanning:
-            if block_comment_depth > 0:
-                body_lines.append(line)
-                block_comment_depth += line.count("/-") - line.count("-/")
-                if block_comment_depth < 0:
-                    block_comment_depth = 0
-                continue
-
-            if not stripped or stripped.startswith("--"):
-                body_lines.append(line)
-                continue
-
-            if stripped.startswith("/-"):
-                body_lines.append(line)
-                block_comment_depth = stripped.count("/-") - stripped.count("-/")
-                if block_comment_depth < 0:
-                    block_comment_depth = 0
-                continue
-
-            if stripped.startswith(("import ", "open ", "set_option ")):
-                preamble.append(stripped)
-                if line.endswith("\n"):
-                    body_lines.append("\n")
-                continue
-
-            scanning = False
-
-        body_lines.append(line)
-
-    return tuple(preamble), "".join(body_lines)
-
-
-def _build_env_cmd(preamble: tuple[str, ...]) -> str:
-    parts = ["import AtpLinter"]
-    for line in preamble:
-        if line != "import AtpLinter":
-            parts.append(line)
-    return "\n".join(parts)
-
-
-def _build_problem_cmd(body: str) -> str:
-    stripped = body.rstrip()
-    if re.search(r"\bby\s*$", stripped):
-        stripped += "\n  sorry"
-    return f"{stripped}\n\n#check_atp_all" if stripped else "#check_atp_all"
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +83,7 @@ def _duration_ms(start: float) -> int:
 
 def _make_result(
     problem: Problem, status: str, toolchain: str, start: float,
-    *, findings=None, error_message=None,
+    *, findings=None, error_message=None, compile_error=False, compile_error_message=None,
 ) -> LintResult:
     return LintResult(
         problem_id=problem.id,
@@ -145,6 +93,8 @@ def _make_result(
         error_message=error_message,
         duration_ms=_duration_ms(start),
         provenance=make_provenance(toolchain),
+        compile_error=compile_error,
+        compile_error_message=compile_error_message,
         metadata=problem.metadata,
     )
 
@@ -156,16 +106,43 @@ def _make_result(
 class LeanRepl:
     """A single persistent Lean REPL process with cached preamble environments."""
 
-    def __init__(self, workspace: Path, toolchain: str):
+    def __init__(
+        self,
+        workspace: Path,
+        toolchain: str,
+        *,
+        warmup_lock: asyncio.Lock | None = None,
+        max_cached_envs: int = 4,
+        max_problem_runs: int = 12,
+        max_tree_rss_mb: float = 9000.0,
+    ):
         self.workspace = workspace
         self.toolchain = toolchain
         self.proc: Optional[asyncio.subprocess.Process] = None
         self._env_cache: dict[tuple[str, ...], int] = {}
+        self._warmup_lock = warmup_lock
+        self.max_cached_envs = max(1, max_cached_envs)
+        self.max_problem_runs = max(1, max_problem_runs)
+        self.max_tree_rss_mb = max_tree_rss_mb
+        self.problem_runs = 0
+        self.restart_count = 0
+        self._rss_check_interval = 4
+        self._last_rss_mb = 0.0
+        self._last_rss_problem_runs = 0
+
+    async def _run_warmup_cmd(self, cmd: str, timeout: int) -> dict:
+        if self._warmup_lock is None:
+            return await self._send_cmd(cmd, timeout=timeout)
+        async with self._warmup_lock:
+            return await self._send_cmd(cmd, timeout=timeout)
 
     async def start(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
         self._env_cache.clear()
+        self.problem_runs = 0
+        self._last_rss_mb = 0.0
+        self._last_rss_problem_runs = 0
         self.proc = await asyncio.create_subprocess_exec(
             "lake", "exe", "repl",
             cwd=self.workspace,
@@ -174,16 +151,20 @@ class LeanRepl:
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
-        resp = await self._send_cmd("import AtpLinter", timeout=300)
-        if resp.get("message"):
-            raise RuntimeError(resp["message"])
-        msgs = resp.get("messages", [])
-        if _has_error_messages(msgs):
-            raise RuntimeError(_message_text(msgs) or "Failed to import AtpLinter")
-        env = resp.get("env")
-        if not isinstance(env, int):
-            raise RuntimeError(f"REPL did not return an environment: {json.dumps(resp)[:1000]}")
-        self._env_cache[tuple()] = env
+        try:
+            resp = await self._run_warmup_cmd("import AtpLinter", timeout=300)
+            if resp.get("message"):
+                raise RuntimeError(resp["message"])
+            msgs = resp.get("messages", [])
+            if _has_error_messages(msgs):
+                raise RuntimeError(_message_text(msgs) or "Failed to import AtpLinter")
+            env = resp.get("env")
+            if not isinstance(env, int):
+                raise RuntimeError(f"REPL did not return an environment: {json.dumps(resp)[:1000]}")
+            self._env_cache[tuple()] = env
+        except Exception:
+            await self.stop()
+            raise
 
     async def stop(self) -> None:
         self._env_cache.clear()
@@ -204,6 +185,7 @@ class LeanRepl:
         try:
             await self.stop()
             await self.start()
+            self.restart_count += 1
         except Exception as exc:
             return f"REPL restart failed: {exc}"
         return None
@@ -231,7 +213,7 @@ class LeanRepl:
                 detail += f"\n{stderr}"
             raise ReplProtocolError(detail)
 
-        payload = {"cmd": cmd}
+        payload: dict[str, object] = {"cmd": cmd}
         if env is not None:
             payload["env"] = env
         self.proc.stdin.write((json.dumps(payload) + "\n\n").encode("utf-8"))
@@ -267,25 +249,81 @@ class LeanRepl:
 
     async def _get_or_create_env(
         self, preamble: tuple[str, ...], timeout: int,
-    ) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    ) -> tuple[Optional[int], Optional[str], Optional[str], Optional[str]]:
         cached = self._env_cache.get(preamble)
         if cached is not None:
-            return cached, None, None
-        resp = await self._send_cmd(_build_env_cmd(preamble), timeout=max(timeout, 300))
+            return cached, None, None, None
+        resp = await self._run_warmup_cmd(_build_env_cmd(preamble), timeout=max(timeout, 300))
         if resp.get("message"):
-            return None, "infra_error", resp["message"]
+            return None, "infra_error", resp["message"], None
         msgs = resp.get("messages", [])
         if _has_error_messages(msgs):
-            return None, "compile_error", (_message_text(msgs) or json.dumps(resp))[:4000]
+            msg = (_message_text(msgs) or json.dumps(resp))[:4000]
+            return None, "compile_error", msg, msg
         env = resp.get("env")
         if not isinstance(env, int):
-            return None, "infra_error", f"No env returned: {json.dumps(resp)[:1000]}"
+            return None, "infra_error", f"No env returned: {json.dumps(resp)[:1000]}", None
         self._env_cache[preamble] = env
-        return env, None, None
+        return env, None, None, None
+
+    def current_tree_rss_mb(self) -> float:
+        if self.proc is None or self.proc.returncode is not None:
+            return 0.0
+        try:
+            out = subprocess.check_output(["ps", "-axo", "pid,ppid,rss"], text=True)
+        except (OSError, subprocess.SubprocessError):
+            return 0.0
+
+        rows: dict[int, tuple[int, int]] = {}
+        for line in out.splitlines():
+            stripped = line.lstrip()
+            if not stripped or not stripped[0].isdigit():
+                continue
+            parts = stripped.split(None, 2)
+            if len(parts) < 3:
+                continue
+            try:
+                pid = int(parts[0])
+                rows[pid] = (int(parts[1]), int(parts[2]))
+            except ValueError:
+                continue
+
+        children: dict[int, list[int]] = {}
+        for pid, (ppid, _rss) in rows.items():
+            children.setdefault(ppid, []).append(pid)
+
+        total_kb = 0
+        stack = [self.proc.pid]
+        seen: set[int] = set()
+        while stack:
+            pid = stack.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            meta = rows.get(pid)
+            if meta is not None:
+                total_kb += meta[1]
+            stack.extend(children.get(pid, []))
+        return total_kb / 1024.0
+
+    async def recycle_reason(self) -> Optional[str]:
+        if len(self._env_cache) >= self.max_cached_envs:
+            return f"cached_envs={len(self._env_cache)}>={self.max_cached_envs}"
+        if self.problem_runs >= self.max_problem_runs:
+            return f"problem_runs={self.problem_runs}>={self.max_problem_runs}"
+        if self.max_tree_rss_mb > 0:
+            if self.problem_runs == 1 or (self.problem_runs - self._last_rss_problem_runs) >= self._rss_check_interval:
+                self._last_rss_mb = await asyncio.to_thread(self.current_tree_rss_mb)
+                self._last_rss_problem_runs = self.problem_runs
+            rss_mb = self._last_rss_mb
+            if rss_mb >= self.max_tree_rss_mb:
+                return f"rss_mb={rss_mb:.1f}>={self.max_tree_rss_mb:.1f}"
+        return None
 
     async def run_problem(self, problem: Problem, timeout: int = 60,
                           _presplit: tuple[tuple[str, ...], str] | None = None) -> LintResult:
         start = time.monotonic()
+        self.problem_runs += 1
 
         try:
             await self._ensure_started()
@@ -295,7 +333,7 @@ class LeanRepl:
         preamble, body = _presplit if _presplit else _split_preamble(problem.lean_code)
 
         try:
-            env, status, error = await self._get_or_create_env(preamble, timeout)
+            env, status, error, compile_error_message = await self._get_or_create_env(preamble, timeout)
         except ReplTimeoutError:
             restart_err = await self._restart()
             msg = f"Exceeded {timeout}s timeout loading preamble"
@@ -310,7 +348,15 @@ class LeanRepl:
             return _make_result(problem, "infra_error", self.toolchain, start, error_message=msg)
 
         if status is not None:
-            return _make_result(problem, status, self.toolchain, start, error_message=error)
+            return _make_result(
+                problem,
+                status,
+                self.toolchain,
+                start,
+                error_message=error,
+                compile_error=(status == "compile_error"),
+                compile_error_message=compile_error_message,
+            )
 
         assert env is not None
 
@@ -339,6 +385,8 @@ class LeanRepl:
         # Classify from REPL messages
         messages = resp.get("messages", [])
         full_output = "\n".join(m.get("data", "") for m in messages if m.get("data"))
+        compile_error = _has_error_messages(messages)
+        compile_error_message = _message_text(messages)[:4000] if compile_error else None
 
         findings, parse_errors = parse_lint_output(full_output)
         done, done_meta = has_done_sentinel(full_output)
@@ -359,13 +407,18 @@ class LeanRepl:
                 parts.append("=== PARSE ERRORS ===\n" + "\n".join(parse_errors))
             return _make_result(
                 problem, "infra_error", self.toolchain, start,
-                findings=findings, error_message=("\n\n".join(parts))[:4000],
+                findings=findings,
+                error_message=("\n\n".join(parts))[:4000],
+                compile_error=compile_error,
+                compile_error_message=compile_error_message,
             )
 
-        if _has_error_messages(messages):
+        if compile_error and not done:
             return _make_result(
                 problem, "compile_error", self.toolchain, start,
-                error_message=_message_text(messages)[:4000],
+                error_message=compile_error_message,
+                compile_error=True,
+                compile_error_message=compile_error_message,
             )
 
         if not done:
@@ -377,6 +430,8 @@ class LeanRepl:
         return _make_result(
             problem, "findings" if findings else "ok", self.toolchain, start,
             findings=findings,
+            compile_error=compile_error,
+            compile_error_message=compile_error_message,
         )
 
 
@@ -385,26 +440,40 @@ class LeanRepl:
 # ---------------------------------------------------------------------------
 
 class _Worker:
-    def __init__(self, workspace: Path, toolchain: str, timeout: int):
-        self.repl = LeanRepl(workspace, toolchain)
+    def __init__(self, workspace: Path, toolchain: str, timeout: int, warmup_lock: asyncio.Lock):
+        self.repl = LeanRepl(workspace, toolchain, warmup_lock=warmup_lock)
         self.toolchain = toolchain
+        self.workspace = workspace
         self.timeout = timeout
         self.pending = 0
         self.queue: asyncio.Queue[tuple[Problem, tuple[tuple[str, ...], str], asyncio.Future[LintResult]] | None] = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._start_lock = asyncio.Lock()
+        self._start_error: Optional[str] = None
 
     @property
     def is_started(self) -> bool:
         return self._task is not None
 
+    @property
+    def has_failed_start(self) -> bool:
+        return self._start_error is not None
+
     async def start(self) -> None:
         if self._task is not None:
             return
+        if self._start_error is not None:
+            raise RuntimeError(self._start_error)
         async with self._start_lock:
             if self._task is not None:
                 return
-            await self.repl.start()
+            if self._start_error is not None:
+                raise RuntimeError(self._start_error)
+            try:
+                await self.repl.start()
+            except Exception as exc:
+                self._start_error = f"Failed to start worker REPL: {exc}"
+                raise RuntimeError(self._start_error) from exc
             self._task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
@@ -416,6 +485,21 @@ class _Worker:
             problem, presplit, future = item
             try:
                 result = await self.repl.run_problem(problem, timeout=self.timeout, _presplit=presplit)
+                if result.status in {"infra_error", "timeout"}:
+                    await self.repl._restart()
+                    result = await lint_problem_subprocess(
+                        self.workspace,
+                        problem,
+                        self.toolchain,
+                        timeout=self.timeout,
+                        row_index=next(_SUBPROCESS_FALLBACK_ROWS),
+                    )
+                    result.metadata = dict(result.metadata)
+                    result.metadata["backend_fallback"] = "subprocess"
+
+                recycle_reason = await self.repl.recycle_reason()
+                if recycle_reason is not None:
+                    await self.repl._restart()
             except Exception as exc:
                 if not future.done():
                     future.set_exception(exc)
@@ -446,7 +530,8 @@ class _Pool:
 
     def __init__(self, workspace: Path, toolchain: str, timeout: int, workers: int):
         self.toolchain = toolchain
-        self._workers = [_Worker(workspace, toolchain, timeout) for _ in range(max(1, workers))]
+        self._warmup_lock = asyncio.Lock()
+        self._workers = [_Worker(workspace, toolchain, timeout, self._warmup_lock) for _ in range(max(1, workers))]
         self._key_owner: dict[tuple[str, ...], _Worker] = {}
         self._lock = asyncio.Lock()
 
@@ -458,30 +543,61 @@ class _Pool:
         await asyncio.gather(*(w.stop() for w in self._workers if w.is_started))
 
     async def _pick(self, key: tuple[str, ...]) -> _Worker:
-        async with self._lock:
-            owner = self._key_owner.get(key)
-            if owner is not None:
-                return owner
-            started = [w for w in self._workers if w.is_started]
-            if not started:
-                w = self._workers[0]
-                await w.start()
-            else:
-                best = min(started, key=lambda w: w.pending)
-                unstarted = next((w for w in self._workers if not w.is_started), None)
-                if unstarted and best.pending >= self._SPAWN_THRESHOLD:
-                    w = unstarted
-                    await w.start()
+        while True:
+            candidate: _Worker | None = None
+            fallback: _Worker | None = None
+
+            async with self._lock:
+                owner = self._key_owner.get(key)
+                if owner is not None:
+                    return owner
+
+                started = [w for w in self._workers if w.is_started]
+                if not started:
+                    candidate = self._workers[0]
                 else:
-                    w = best
-            self._key_owner[key] = w
-            return w
+                    best = min(started, key=lambda w: w.pending)
+                    unstarted = next(
+                        (w for w in self._workers if not w.is_started and not w.has_failed_start),
+                        None,
+                    )
+                    if unstarted and best.pending >= self._SPAWN_THRESHOLD:
+                        candidate = unstarted
+                        fallback = best
+                    else:
+                        self._key_owner[key] = best
+                        return best
+
+            assert candidate is not None
+
+            try:
+                await candidate.start()
+            except Exception:
+                async with self._lock:
+                    owner = self._key_owner.get(key)
+                    if owner is not None:
+                        return owner
+
+                    started = [w for w in self._workers if w.is_started]
+                    if started:
+                        chosen = fallback if fallback is not None and fallback.is_started else min(started, key=lambda w: w.pending)
+                        self._key_owner[key] = chosen
+                        return chosen
+                raise
+
+            async with self._lock:
+                owner = self._key_owner.get(key)
+                if owner is not None:
+                    return owner
+                if candidate.is_started:
+                    self._key_owner[key] = candidate
+                    return candidate
 
     async def run_problem(self, problem: Problem) -> LintResult:
         presplit = _split_preamble(problem.lean_code)
         key = presplit[0]
-        worker = await self._pick(key)
         try:
+            worker = await self._pick(key)
             return await worker.submit(problem, presplit)
         except Exception as exc:
             return _infra_result(problem, self.toolchain, f"Worker crashed: {exc}")
@@ -511,13 +627,15 @@ async def run_batch(
     try:
         await pool.start()
     except (FileNotFoundError, RuntimeError, ReplProtocolError, ReplTimeoutError) as exc:
-        for problem in problems:
-            r = _infra_result(problem, toolchain, str(exc))
-            if collect_results:
-                results.append(r)
-            if on_result:
-                on_result(r)
-        return results
+        return await run_batch_subprocess(
+            workspace,
+            problems,
+            toolchain,
+            timeout=timeout,
+            on_result=on_result,
+            workers=workers,
+            collect_results=collect_results,
+        )
 
     try:
         if workers <= 1:
@@ -530,7 +648,7 @@ async def run_batch(
         else:
             # Bounded parallel: at most `window` in-flight at a time,
             # emit results in dataset order.
-            window = max(1, workers * 4)
+            window = max(1, workers)
             slots: dict[int, LintResult] = {}
             next_emit = 0
             in_flight: set[asyncio.Task] = set()

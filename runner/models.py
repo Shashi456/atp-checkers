@@ -72,11 +72,13 @@ class LintResult:
     """Result of linting a single problem."""
     problem_id: str
     source: str
-    status: str  # ok, findings, compile_error, timeout, infra_error
+    status: str  # Primary outcome: ok, findings, compile_error, timeout, infra_error
     findings: list[Finding]
     error_message: Optional[str]
     duration_ms: int
     provenance: Provenance
+    compile_error: bool = False
+    compile_error_message: Optional[str] = None
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -99,6 +101,8 @@ class LintResult:
             "error_message": self.error_message,
             "duration_ms": self.duration_ms,
             "provenance": self.provenance.to_dict(),
+            "compile_error": self.compile_error,
+            "compile_error_message": self.compile_error_message,
             "metadata": self.metadata,
         }
 

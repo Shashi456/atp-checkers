@@ -4,11 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from runner.executor import lint_problem, run_batch, wrap_with_linter
+import runner.executor as executor_module
+from runner.executor import _ensure_import_bundle, _resolve_direct_lean, lint_problem, run_batch, wrap_with_linter
 from runner.models import (
     LintResult, Problem, Provenance,
     parse_lint_output, has_done_sentinel,
 )
+from runner.preamble import split_preamble
 
 
 def _mk_result(problem: Problem) -> LintResult:
@@ -52,11 +54,27 @@ class SlowProc(FakeProc):
 
 
 class ExecutorParsingTests(unittest.TestCase):
+    def setUp(self):
+        executor_module._LEAN_ENV_CACHE.clear()
+        executor_module._LEAN_ENV_FAILURES.clear()
+        executor_module._IMPORT_MODULE_CACHE.clear()
+        executor_module._IMPORT_MODULE_FAILURES.clear()
+        executor_module._IMPORT_MODULE_LOCKS.clear()
+
     def test_wrap_with_linter(self):
         wrapped = wrap_with_linter("def x : Nat := 1")
         self.assertIn("import AtpLinter", wrapped)
         self.assertIn("#check_atp_all", wrapped)
         self.assertIn("def x : Nat := 1", wrapped)
+
+    def test_wrap_with_linter_appends_sorry_after_by_comment(self):
+        wrapped = wrap_with_linter("example : True := by -- placeholder")
+        self.assertIn("sorry", wrapped)
+
+    def test_split_preamble_ignores_import_inside_block_comment(self):
+        preamble, body = split_preamble("/- import Mathlib -/\nexample : True := by trivial\n")
+        self.assertEqual((), preamble)
+        self.assertIn("import Mathlib", body)
 
     def test_parse_lint_output_collects_findings_and_malformed_json(self):
         stdout = "\n".join([
@@ -77,6 +95,13 @@ class ExecutorParsingTests(unittest.TestCase):
 
 
 class ExecutorAsyncTests(unittest.TestCase):
+    def setUp(self):
+        executor_module._LEAN_ENV_CACHE.clear()
+        executor_module._LEAN_ENV_FAILURES.clear()
+        executor_module._IMPORT_MODULE_CACHE.clear()
+        executor_module._IMPORT_MODULE_FAILURES.clear()
+        executor_module._IMPORT_MODULE_LOCKS.clear()
+
     def run_async(self, coro):
         loop = asyncio.new_event_loop()
         try:
@@ -105,8 +130,65 @@ class ExecutorAsyncTests(unittest.TestCase):
             self.assertEqual("findings", result.status)
             self.assertEqual(1, len(result.findings))
             self.assertEqual("Potential Division by Zero", result.findings[0].category)
+            self.assertFalse(result.compile_error)
+            self.assertIsNone(result.compile_error_message)
 
         self.run_async(run())
+
+    def test_ensure_import_bundle_compiles_once(self):
+        class CompletedProc:
+            def __init__(self):
+                self.returncode = 0
+                self.stdout = ""
+                self.stderr = ""
+
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            fake_lean = workspace / "lean"
+            fake_lean.write_text("", encoding="utf-8")
+            calls = []
+
+            def fake_run(args, cwd, env, stdout, stderr, text):
+                calls.append(args)
+                Path(args[2]).write_text("compiled", encoding="utf-8")
+                return CompletedProc()
+
+            with patch("runner.executor.subprocess.run", side_effect=fake_run):
+                first = _ensure_import_bundle(
+                    workspace,
+                    ("import Mathlib",),
+                    (str(fake_lean),),
+                    {"LEAN": str(fake_lean), "LEAN_PATH": ""},
+                )
+                second = _ensure_import_bundle(
+                    workspace,
+                    ("import Mathlib",),
+                    (str(fake_lean),),
+                    {"LEAN": str(fake_lean), "LEAN_PATH": ""},
+                )
+
+        self.assertIsNotNone(first)
+        self.assertEqual(first, second)
+        self.assertEqual(1, len(calls))
+        assert first is not None
+        self.assertTrue(first.startswith("AtpCache.Imports_"))
+
+    def test_resolve_direct_lean_caches_workspace_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            payload = '{"LEAN": "/tmp/lean", "LEAN_PATH": "/tmp/path"}'
+            with patch("runner.executor.subprocess.check_output", return_value=payload) as mock_check:
+                first = _resolve_direct_lean(workspace)
+                second = _resolve_direct_lean(workspace)
+
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertEqual(first, second)
+        self.assertEqual(1, mock_check.call_count)
+        self.assertEqual(
+            str(workspace.resolve() / ".atp_import_cache"),
+            first[1]["LEAN_PATH"].split(":", 1)[0],
+        )
 
     def test_lint_problem_status_ok(self):
         async def run():
@@ -121,6 +203,39 @@ class ExecutorAsyncTests(unittest.TestCase):
 
             self.assertEqual("ok", result.status)
             self.assertEqual(0, len(result.findings))
+            self.assertFalse(result.compile_error)
+            self.assertIsNone(result.compile_error_message)
+
+        self.run_async(run())
+
+    def test_lint_problem_uses_direct_lean_when_resolved(self):
+        async def run():
+            seen = {}
+
+            async def fake_create(*args, **kwargs):
+                seen["args"] = args
+                seen["env"] = kwargs.get("env")
+                return FakeProc(stdout='ATP_DONE:{"declarations":1,"findings":0}', returncode=0)
+
+            with tempfile.TemporaryDirectory() as td:
+                workspace = Path(td)
+                problem = Problem(id="p2", source="s", lean_code="def ok : Nat := 1", metadata={})
+                with patch("runner.executor.asyncio.create_subprocess_exec", side_effect=fake_create), \
+                     patch("runner.executor._ensure_import_bundle", return_value=None):
+                    result = await lint_problem(
+                        workspace,
+                        problem,
+                        "leanprover/lean4:v4.24.0",
+                        timeout=1,
+                        lean_cmd=("/tmp/lean",),
+                        lean_env={"LEAN": "/tmp/lean"},
+                    )
+
+            self.assertEqual("ok", result.status)
+            self.assertEqual("/tmp/lean", seen["args"][0])
+            self.assertTrue(seen["args"][1].startswith("_Problem_0_p2_"))
+            self.assertTrue(seen["args"][1].endswith(".lean"))
+            self.assertEqual({"LEAN": "/tmp/lean"}, seen["env"])
 
         self.run_async(run())
 
@@ -136,7 +251,34 @@ class ExecutorAsyncTests(unittest.TestCase):
                     result = await lint_problem(workspace, problem, "leanprover/lean4:v4.24.0", timeout=1)
 
             self.assertEqual("compile_error", result.status)
+            self.assertTrue(result.compile_error)
             self.assertIn("compile failed", result.error_message)
+            self.assertIn("compile failed", result.compile_error_message)
+
+        self.run_async(run())
+
+    def test_lint_problem_keeps_findings_when_compile_error_has_done(self):
+        async def run():
+            stdout = "\n".join([
+                "bad.lean:1:1: error: parse failed",
+                'ATP_LINT:{"category":"Potential Division by Zero","severity":"WARNING","declaration":"d","message":"m","confidence":"maybe","provedBy":null}',
+                'ATP_DONE:{"declarations":1,"findings":1}',
+            ])
+
+            async def fake_create(*_args, **_kwargs):
+                return FakeProc(stdout=stdout, stderr="compile failed", returncode=1)
+
+            with tempfile.TemporaryDirectory() as td:
+                workspace = Path(td)
+                problem = Problem(id="p3b", source="s", lean_code="def bad := ", metadata={})
+                with patch("runner.executor.asyncio.create_subprocess_exec", side_effect=fake_create):
+                    result = await lint_problem(workspace, problem, "leanprover/lean4:v4.24.0", timeout=1)
+
+            self.assertEqual("findings", result.status)
+            self.assertTrue(result.compile_error)
+            self.assertEqual(1, len(result.findings))
+            self.assertIn("compile failed", result.compile_error_message)
+            self.assertIsNone(result.error_message)
 
         self.run_async(run())
 
@@ -209,13 +351,14 @@ class ExecutorAsyncTests(unittest.TestCase):
             ]
             calls = []
 
-            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0):
+            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0, **_kwargs):
                 calls.append(row_index)
                 return _mk_result(problem)
 
             with tempfile.TemporaryDirectory() as td:
                 workspace = Path(td)
-                with patch("runner.executor.lint_problem", side_effect=fake_lint):
+                with patch("runner.executor.lint_problem", side_effect=fake_lint), \
+                     patch("runner.executor._resolve_direct_lean_async", return_value=None):
                     results = await run_batch(workspace, problems, "leanprover/lean4:v4.24.0", workers=1)
 
             self.assertEqual(3, len(results))
@@ -232,17 +375,78 @@ class ExecutorAsyncTests(unittest.TestCase):
             ]
             calls = []
 
-            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0):
+            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0, **_kwargs):
                 calls.append(row_index)
                 return _mk_result(problem)
 
             with tempfile.TemporaryDirectory() as td:
                 workspace = Path(td)
-                with patch("runner.executor.lint_problem", side_effect=fake_lint):
+                with patch("runner.executor.lint_problem", side_effect=fake_lint), \
+                     patch("runner.executor._resolve_direct_lean_async", return_value=None):
                     results = await run_batch(workspace, problems, "leanprover/lean4:v4.24.0", workers=2)
 
             self.assertEqual(3, len(results))
             self.assertEqual({0, 1, 2}, set(calls))
+
+        self.run_async(run())
+
+    def test_run_batch_parallel_emits_results_in_input_order(self):
+        async def run():
+            problems = [
+                Problem(id="a", source="src", lean_code="def a : Nat := 0", metadata={}),
+                Problem(id="b", source="src", lean_code="def b : Nat := 0", metadata={}),
+                Problem(id="c", source="src", lean_code="def c : Nat := 0", metadata={}),
+            ]
+            delays = {"a": 0.03, "b": 0.0, "c": 0.01}
+
+            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0, **_kwargs):
+                await asyncio.sleep(delays[problem.id])
+                return _mk_result(problem)
+
+            with tempfile.TemporaryDirectory() as td:
+                workspace = Path(td)
+                with patch("runner.executor.lint_problem", side_effect=fake_lint), \
+                     patch("runner.executor._resolve_direct_lean_async", return_value=None):
+                    results = await run_batch(workspace, problems, "leanprover/lean4:v4.24.0", workers=3)
+
+            self.assertEqual(["a", "b", "c"], [result.problem_id for result in results])
+
+        self.run_async(run())
+
+    def test_run_batch_parallel_respects_worker_limit(self):
+        async def run():
+            problems = [
+                Problem(id=str(i), source="src", lean_code="def x : Nat := 0", metadata={})
+                for i in range(6)
+            ]
+            current = 0
+            max_seen = 0
+            gate = asyncio.Event()
+
+            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0, **_kwargs):
+                nonlocal current, max_seen
+                current += 1
+                max_seen = max(max_seen, current)
+                await gate.wait()
+                current -= 1
+                return _mk_result(problem)
+
+            with tempfile.TemporaryDirectory() as td:
+                workspace = Path(td)
+                with patch("runner.executor.lint_problem", side_effect=fake_lint), \
+                     patch("runner.executor._resolve_direct_lean_async", return_value=None):
+                    task = asyncio.create_task(
+                        run_batch(workspace, problems, "leanprover/lean4:v4.24.0", workers=2)
+                    )
+                    for _ in range(5):
+                        if max_seen == 2:
+                            break
+                        await asyncio.sleep(0)
+                    self.assertEqual(2, max_seen)
+                    gate.set()
+                    results = await task
+
+            self.assertEqual(6, len(results))
 
         self.run_async(run())
 
@@ -254,12 +458,13 @@ class ExecutorAsyncTests(unittest.TestCase):
             ]
             seen = []
 
-            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0):
+            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0, **_kwargs):
                 return _mk_result(problem)
 
             with tempfile.TemporaryDirectory() as td:
                 workspace = Path(td)
-                with patch("runner.executor.lint_problem", side_effect=fake_lint):
+                with patch("runner.executor.lint_problem", side_effect=fake_lint), \
+                     patch("runner.executor._resolve_direct_lean_async", return_value=None):
                     results = await run_batch(
                         workspace,
                         problems,

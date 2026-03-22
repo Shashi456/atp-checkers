@@ -1,16 +1,23 @@
 """Subprocess backend for the ATP checkers runner (fallback/debug).
 
-Spawns a fresh `lake env lean` process per problem. Slow for Mathlib-heavy
-datasets due to repeated import cost. Use the persistent backend (default)
-for production runs.
+Spawns a fresh Lean process per problem. It resolves the workspace environment
+once via `lake env` and then invokes the Lean binary directly, falling back to
+`lake env lean` if env resolution fails. Still slow for Mathlib-heavy datasets
+due to repeated import cost, but much cheaper than wrapping every problem in a
+fresh `lake env` shell.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import logging
 import os
 import re
 import signal
+import shutil
+import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -19,6 +26,170 @@ from .models import (
     Problem, LintResult, Provenance,
     parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT,
 )
+from .preamble import normalize_imports, partition_preamble, render_problem_source, split_preamble
+
+
+log = logging.getLogger(__name__)
+
+_FAILURE_RETRY_SECONDS = 30.0
+
+_LEAN_ENV_LOCK = threading.Lock()
+_LEAN_ENV_CACHE: dict[Path, tuple[tuple[str, ...], dict[str, str]]] = {}
+_LEAN_ENV_FAILURES: dict[Path, float] = {}
+_IMPORT_CACHE_LOCK = threading.Lock()
+_IMPORT_MODULE_CACHE: dict[tuple[Path, tuple[str, ...]], str] = {}
+_IMPORT_MODULE_FAILURES: dict[tuple[Path, tuple[str, ...]], float] = {}
+_IMPORT_MODULE_LOCKS: dict[tuple[Path, tuple[str, ...]], threading.Lock] = {}
+
+
+def _cache_root(workspace: Path) -> Path:
+    return workspace.resolve() / ".atp_import_cache"
+
+
+def _augment_lean_env(workspace: Path, env: dict[str, str]) -> dict[str, str]:
+    augmented = dict(env)
+    cache_root = str(_cache_root(workspace))
+    lean_path = augmented.get("LEAN_PATH", "")
+    paths = [p for p in lean_path.split(os.pathsep) if p]
+    if cache_root not in paths:
+        augmented["LEAN_PATH"] = os.pathsep.join([cache_root, *paths]) if paths else cache_root
+    return augmented
+
+
+def _bundle_module_name(imports: tuple[str, ...]) -> str:
+    digest = hashlib.sha256("\n".join(imports).encode("utf-8")).hexdigest()[:16]
+    return f"AtpCache.Imports_{digest}"
+
+
+def _ensure_import_bundle(
+    workspace: Path,
+    imports: tuple[str, ...],
+    lean_cmd: tuple[str, ...] | None,
+    lean_env: dict[str, str] | None,
+) -> str | None:
+    if lean_cmd is None or lean_env is None or len(lean_cmd) != 1:
+        log.debug("Skipping import-bundle cache: unsupported Lean command %r", lean_cmd)
+        return None
+
+    lean_path = lean_cmd[0]
+    resolved_lean = lean_path if os.path.isabs(lean_path) else shutil.which(lean_path)
+    if not resolved_lean:
+        log.debug("Skipping import-bundle cache: could not resolve Lean binary %r", lean_path)
+        return None
+
+    workspace = workspace.resolve()
+    normalized_imports = normalize_imports(imports)
+    key = (workspace, normalized_imports)
+    now = time.monotonic()
+    with _IMPORT_CACHE_LOCK:
+        cached = _IMPORT_MODULE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        failed_until = _IMPORT_MODULE_FAILURES.get(key)
+        if failed_until is not None:
+            if failed_until > now:
+                return None
+            _IMPORT_MODULE_FAILURES.pop(key, None)
+        lock = _IMPORT_MODULE_LOCKS.setdefault(key, threading.Lock())
+
+    with lock:
+        with _IMPORT_CACHE_LOCK:
+            cached = _IMPORT_MODULE_CACHE.get(key)
+            if cached is not None:
+                return cached
+            failed_until = _IMPORT_MODULE_FAILURES.get(key)
+            if failed_until is not None:
+                if failed_until > time.monotonic():
+                    return None
+                _IMPORT_MODULE_FAILURES.pop(key, None)
+
+        module_name = _bundle_module_name(normalized_imports)
+        cache_root = _cache_root(workspace)
+        source_path = cache_root / Path(*module_name.split(".")).with_suffix(".lean")
+        olean_path = source_path.with_suffix(".olean")
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_text = "\n".join(["import AtpLinter", *normalized_imports]) + "\n"
+
+        source_changed = True
+        if source_path.exists():
+            existing = source_path.read_text(encoding="utf-8")
+            source_changed = existing != source_text
+        if source_changed:
+            source_path.write_text(source_text, encoding="utf-8")
+            olean_path.unlink(missing_ok=True)
+
+        if not olean_path.exists():
+            proc = subprocess.run(
+                [resolved_lean, "-o", str(olean_path), str(source_path)],
+                cwd=workspace,
+                env=lean_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if proc.returncode != 0:
+                log.warning(
+                    "Import-bundle cache compile failed for %s: %s",
+                    module_name,
+                    (proc.stderr or proc.stdout or "unknown error")[:400],
+                )
+                with _IMPORT_CACHE_LOCK:
+                    _IMPORT_MODULE_FAILURES[key] = time.monotonic() + _FAILURE_RETRY_SECONDS
+                return None
+
+        with _IMPORT_CACHE_LOCK:
+            _IMPORT_MODULE_CACHE[key] = module_name
+        return module_name
+
+
+def _resolve_direct_lean(workspace: Path) -> tuple[tuple[str, ...], dict[str, str]] | None:
+    """Resolve a workspace-specific Lean command and environment once.
+
+    Uses `lake env python` to capture the effective Lean environment, then caches
+    the direct Lean binary path from the `LEAN` variable.
+    """
+    workspace = workspace.resolve()
+    with _LEAN_ENV_LOCK:
+        cached = _LEAN_ENV_CACHE.get(workspace)
+        if cached is not None:
+            return cached
+        failed_until = _LEAN_ENV_FAILURES.get(workspace)
+        if failed_until is not None:
+            if failed_until > time.monotonic():
+                return None
+            _LEAN_ENV_FAILURES.pop(workspace, None)
+
+    try:
+        raw_env = subprocess.check_output(
+            [
+                "lake",
+                "env",
+                "python",
+                "-c",
+                "import json, os; print(json.dumps(dict(os.environ)))",
+            ],
+            cwd=workspace,
+            text=True,
+        )
+        env = json.loads(raw_env)
+        lean = env.get("LEAN")
+        if not isinstance(lean, str) or not lean:
+            raise RuntimeError("lake env did not expose LEAN")
+        env = _augment_lean_env(workspace, env)
+        resolved = ((lean,), env)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, RuntimeError) as exc:
+        log.warning("Direct Lean resolution failed for %s: %s", workspace, exc)
+        with _LEAN_ENV_LOCK:
+            _LEAN_ENV_FAILURES[workspace] = time.monotonic() + _FAILURE_RETRY_SECONDS
+        return None
+
+    with _LEAN_ENV_LOCK:
+        _LEAN_ENV_CACHE[workspace] = resolved
+    return resolved
+
+
+async def _resolve_direct_lean_async(workspace: Path) -> tuple[tuple[str, ...], dict[str, str]] | None:
+    return await asyncio.to_thread(_resolve_direct_lean, workspace)
 
 
 def _sanitize_id_for_lean(problem_id: str) -> str:
@@ -47,15 +218,7 @@ def wrap_with_linter(lean_code: str) -> str:
     If the code ends with 'by' (common in benchmark datasets that omit the proof),
     append 'sorry' so that '#check_atp_all' isn't parsed as a tactic.
     """
-    stripped = lean_code.rstrip()
-    if re.search(r'\bby\s*$', stripped):
-        lean_code = stripped + "\n  sorry"
-    return f"""import AtpLinter
-
-{lean_code}
-
-#check_atp_all
-"""
+    return render_problem_source(lean_code)
 
 
 
@@ -65,6 +228,8 @@ async def lint_problem(
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
     row_index: int = 0,
+    lean_cmd: tuple[str, ...] | None = None,
+    lean_env: dict[str, str] | None = None,
 ) -> LintResult:
     """
     Lint a single problem.
@@ -75,6 +240,8 @@ async def lint_problem(
         toolchain: Lean toolchain string (for provenance)
         timeout: Timeout per problem in seconds
         row_index: Unique row index to prevent temp file collisions
+        lean_cmd: Optional resolved Lean command (workspace-specific)
+        lean_env: Optional environment for direct Lean execution
 
     Returns:
         LintResult with status and findings
@@ -85,8 +252,19 @@ async def lint_problem(
     safe_id = _sanitize_id_for_lean(problem.id)
     file_stem = f"_Problem_{row_index}_{safe_id}"
     problem_file = workspace / f"{file_stem}.lean"
+    preamble, _body = split_preamble(problem.lean_code)
+    imports, _directives = partition_preamble(preamble)
+    import_module = None
+    if lean_cmd is not None and lean_env is not None:
+        import_module = await asyncio.to_thread(
+            _ensure_import_bundle,
+            workspace,
+            imports,
+            lean_cmd,
+            lean_env,
+        )
     try:
-        problem_file.write_text(wrap_with_linter(problem.lean_code), encoding="utf-8")
+        problem_file.write_text(render_problem_source(problem.lean_code, import_module=import_module), encoding="utf-8")
     except (OSError, IOError) as e:
         duration_ms = int((time.monotonic() - start_time) * 1000)
         return LintResult(
@@ -102,10 +280,19 @@ async def lint_problem(
 
     try:
         # Run Lean with timeout, in its own process group
+        if lean_cmd is None:
+            resolved = await _resolve_direct_lean_async(workspace)
+            if resolved is not None:
+                lean_cmd, lean_env = resolved
+        if lean_cmd is None:
+            lean_cmd = ("lake", "env", "lean")
+            lean_env = None
+
         try:
             proc = await asyncio.create_subprocess_exec(
-                "lake", "env", "lean", problem_file.name,
+                *lean_cmd, problem_file.name,
                 cwd=workspace,
+                env=lean_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
@@ -117,7 +304,7 @@ async def lint_problem(
                 source=problem.source,
                 status="infra_error",
                 findings=[],
-                error_message=f"Failed to spawn lake process: {e}",
+                error_message=f"Failed to spawn Lean process: {e}",
                 duration_ms=duration_ms,
                 provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
@@ -156,12 +343,31 @@ async def lint_problem(
 
         stdout_str = stdout_bytes.decode("utf-8", errors="replace")
         stderr_str = stderr_bytes.decode("utf-8", errors="replace")
+        if proc.returncode is None:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            return LintResult(
+                problem_id=problem.id,
+                source=problem.source,
+                status="infra_error",
+                findings=[],
+                error_message="Lean process completed without a return code",
+                duration_ms=duration_ms,
+                provenance=make_provenance(toolchain),
+                metadata=problem.metadata,
+            )
+        returncode = proc.returncode
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
         # Parse linter output
         findings, parse_errors = parse_lint_output(stdout_str)
         done, done_meta = has_done_sentinel(stdout_str)
+        compile_error = returncode > 0
+        compile_error_message = None
+        if compile_error:
+            compile_error_message = (
+                f"=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:2000]}"
+            )[:4000]
 
         # Check for truncated output by comparing expected vs actual findings count
         truncation_error = None
@@ -188,13 +394,15 @@ async def lint_problem(
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
                 provenance=make_provenance(toolchain),
+                compile_error=compile_error,
+                compile_error_message=compile_error_message,
                 metadata=problem.metadata,
             )
 
         # Determine status
-        if proc.returncode < 0:
+        if returncode < 0:
             # Negative return code means killed by signal (OOM, SIGKILL, etc.) - infrastructure issue
-            signal_num = -proc.returncode
+            signal_num = -returncode
             combined_output = f"Process killed by signal {signal_num}\n\n=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:2000]}"
             return LintResult(
                 problem_id=problem.id,
@@ -206,17 +414,30 @@ async def lint_problem(
                 provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
-        elif proc.returncode > 0:
-            # Positive return code means Lean compilation error - dataset issue
-            combined_output = f"=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:2000]}"
+        elif returncode > 0:
+            if done:
+                return LintResult(
+                    problem_id=problem.id,
+                    source=problem.source,
+                    status="findings" if findings else "ok",
+                    findings=findings,
+                    error_message=None,
+                    duration_ms=duration_ms,
+                    provenance=make_provenance(toolchain),
+                    compile_error=True,
+                    compile_error_message=compile_error_message,
+                    metadata=problem.metadata,
+                )
             return LintResult(
                 problem_id=problem.id,
                 source=problem.source,
                 status="compile_error",
                 findings=[],
-                error_message=combined_output[:4000],
+                error_message=compile_error_message,
                 duration_ms=duration_ms,
                 provenance=make_provenance(toolchain),
+                compile_error=True,
+                compile_error_message=compile_error_message,
                 metadata=problem.metadata,
             )
         elif not done:
@@ -229,6 +450,8 @@ async def lint_problem(
                 error_message=combined_output[:4000],
                 duration_ms=duration_ms,
                 provenance=make_provenance(toolchain),
+                compile_error=compile_error,
+                compile_error_message=compile_error_message,
                 metadata=problem.metadata,
             )
         else:
@@ -240,6 +463,8 @@ async def lint_problem(
                 error_message=None,
                 duration_ms=duration_ms,
                 provenance=make_provenance(toolchain),
+                compile_error=compile_error,
+                compile_error_message=compile_error_message,
                 metadata=problem.metadata,
             )
 
@@ -249,34 +474,17 @@ async def lint_problem(
 
 
 def _cleanup_problem_artifacts(workspace: Path, file_stem: str):
-    """Remove temp .lean file and any generated build artifacts."""
+    """Remove the temp .lean file used for a subprocess run.
+
+    Direct `lean` execution does not emit build artifacts for these ad hoc files,
+    so avoid scanning `.lake/build` on every row.
+    """
     # Remove the .lean file
     problem_file = workspace / f"{file_stem}.lean"
     try:
         problem_file.unlink(missing_ok=True)
     except Exception:
         pass
-
-    # Remove build artifacts (.olean, .ilean, .trace)
-    # Lake puts these in .lake/build/lib/ with the same base name
-    build_lib = workspace / ".lake" / "build" / "lib"
-    if build_lib.exists():
-        for ext in [".olean", ".ilean", ".trace", ".c", ".o"]:
-            artifact = build_lib / f"{file_stem}{ext}"
-            try:
-                artifact.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    # Also clean up IR artifacts in .lake/build/ir/
-    build_ir = workspace / ".lake" / "build" / "ir"
-    if build_ir.exists():
-        for ext in [".c", ".c.trace"]:
-            artifact = build_ir / f"{file_stem}{ext}"
-            try:
-                artifact.unlink(missing_ok=True)
-            except Exception:
-                pass
 
 
 
@@ -306,16 +514,32 @@ async def run_batch(
     if workers <= 1:
         # Sequential execution
         results: list[LintResult] = []
+        resolved = await _resolve_direct_lean_async(workspace)
+        lean_cmd = resolved[0] if resolved is not None else None
+        lean_env = resolved[1] if resolved is not None else None
         for idx, problem in enumerate(problems):
-            result = await lint_problem(workspace, problem, toolchain, timeout, row_index=idx)
+            result = await lint_problem(
+                workspace,
+                problem,
+                toolchain,
+                timeout,
+                row_index=idx,
+                lean_cmd=lean_cmd,
+                lean_env=lean_env,
+            )
             if collect_results:
                 results.append(result)
             if on_result:
                 on_result(result)
         return results
     else:
-        # Parallel execution with a bounded in-flight window, streaming results in dataset order
-        window = max(1, workers * 4)
+        # Parallel execution with a bounded in-flight window, streaming results in dataset order.
+        # Keep the in-flight count aligned with the requested worker count so `-j N`
+        # does not fan out into many more concurrent Lean processes than expected.
+        window = max(1, workers)
+        resolved = await _resolve_direct_lean_async(workspace)
+        lean_cmd = resolved[0] if resolved is not None else None
+        lean_env = resolved[1] if resolved is not None else None
         result_slots: dict[int, LintResult] = {}
         next_emit = 0
         results: list[LintResult] = []
@@ -326,7 +550,13 @@ async def run_batch(
 
         async def process_one(idx: int, problem: Problem):
             result_slots[idx] = await lint_problem(
-                workspace, problem, toolchain, timeout, row_index=idx
+                workspace,
+                problem,
+                toolchain,
+                timeout,
+                row_index=idx,
+                lean_cmd=lean_cmd,
+                lean_env=lean_env,
             )
 
         def emit_ready() -> None:
