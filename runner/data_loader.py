@@ -12,11 +12,13 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterator, Optional, Tuple
 
 from .models import Problem, ParseError
 
 log = logging.getLogger(__name__)
+
+DatasetItem = Problem | ParseError
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +148,17 @@ def _resolved_to_problem(resolved: ResolvedRow, source: str) -> Problem:
     )
 
 
+def _collect_items(items: Iterator[DatasetItem]) -> Tuple[list[Problem], list[ParseError]]:
+    problems: list[Problem] = []
+    errors: list[ParseError] = []
+    for item in items:
+        if isinstance(item, Problem):
+            problems.append(item)
+        else:
+            errors.append(item)
+    return problems, errors
+
+
 # ---------------------------------------------------------------------------
 # JSONL loader
 # ---------------------------------------------------------------------------
@@ -169,11 +182,19 @@ def load_jsonl(
     Returns:
         (problems, errors)
     """
+    return _collect_items(iter_jsonl(path, source=source, on_error=on_error, header=header))
+
+
+def iter_jsonl(
+    path: Path,
+    source: str | None = None,
+    on_error: str = "skip",
+    header: str | None = None,
+) -> Iterator[DatasetItem]:
+    """Iterate over a JSONL dataset, yielding Problem or ParseError in file order."""
     if source is None:
         source = path.stem
 
-    problems: list[Problem] = []
-    errors: list[ParseError] = []
     first_strategy = None
 
     with open(path, "r", encoding="utf-8") as f:
@@ -188,7 +209,7 @@ def load_jsonl(
                 err = ParseError(line_num, f"Invalid JSON: {e}", line[:200])
                 if on_error == "raise":
                     raise ValueError(f"{path}:{line_num}: {err.error}")
-                errors.append(err)
+                yield err
                 continue
 
             try:
@@ -197,16 +218,20 @@ def load_jsonl(
                 err = ParseError(line_num, str(e), line[:200])
                 if on_error == "raise":
                     raise ValueError(f"{path}:{line_num}: {err.error}")
-                errors.append(err)
+                yield err
                 continue
 
             if first_strategy is None:
                 first_strategy = resolved.strategy
                 log.info("Detected schema: %s (from %s)", resolved.strategy, path.name)
 
-            problems.append(_resolved_to_problem(resolved, source))
+            yield _resolved_to_problem(resolved, source)
 
-    return problems, errors
+
+def count_jsonl_entries(path: Path) -> int:
+    """Count non-empty JSONL lines for progress reporting."""
+    with open(path, "r", encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
 
 
 
@@ -229,6 +254,15 @@ def load_json(
     Returns:
         (problems, errors)
     """
+    return _collect_items(iter_json(path, source=source, header=header))
+
+
+def iter_json(
+    path: Path,
+    source: str | None = None,
+    header: str | None = None,
+) -> Iterator[DatasetItem]:
+    """Iterate over a JSON array dataset, yielding Problem or ParseError in array order."""
     if source is None:
         source = path.stem
 
@@ -236,33 +270,31 @@ def load_json(
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:
-            return [], [ParseError(0, f"Invalid JSON file: {e}", "")]
+            yield ParseError(0, f"Invalid JSON file: {e}", "")
+            return
 
     if not isinstance(data, list):
-        return [], [ParseError(0, f"Expected JSON array, got {type(data).__name__}", "")]
+        yield ParseError(0, f"Expected JSON array, got {type(data).__name__}", "")
+        return
 
-    problems: list[Problem] = []
-    errors: list[ParseError] = []
     first_strategy = None
 
     for idx, row in enumerate(data):
         if not isinstance(row, dict):
-            errors.append(ParseError(idx + 1, f"Expected object at index {idx}, got {type(row).__name__}", str(row)[:200]))
+            yield ParseError(idx + 1, f"Expected object at index {idx}, got {type(row).__name__}", str(row)[:200])
             continue
 
         try:
             resolved = resolve_row(row, row_index=idx, header=header)
         except ValueError as e:
-            errors.append(ParseError(idx + 1, str(e), str(row)[:200]))
+            yield ParseError(idx + 1, str(e), str(row)[:200])
             continue
 
         if first_strategy is None:
             first_strategy = resolved.strategy
             log.info("Detected schema: %s (from %s)", resolved.strategy, path.name)
 
-        problems.append(_resolved_to_problem(resolved, source))
-
-    return problems, errors
+        yield _resolved_to_problem(resolved, source)
 
 
 # ---------------------------------------------------------------------------
@@ -286,39 +318,52 @@ def load_lean_dir(
     Returns:
         (problems, errors)
     """
+    return _collect_items(iter_lean_dir(directory, source=source, header=header))
+
+
+def iter_lean_dir(
+    directory: Path,
+    source: str | None = None,
+    header: str | None = None,
+) -> Iterator[DatasetItem]:
+    """Iterate over a directory of .lean files in sorted filename order."""
     if source is None:
         source = directory.name
 
     lean_files = sorted(directory.glob("*.lean"))
     if not lean_files:
-        return [], [ParseError(0, f"No .lean files found in {directory}", "")]
+        yield ParseError(0, f"No .lean files found in {directory}", "")
+        return
 
-    problems: list[Problem] = []
-    errors: list[ParseError] = []
-
+    loaded = 0
     for idx, lean_file in enumerate(lean_files):
         try:
             lean_code = lean_file.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as e:
-            errors.append(ParseError(idx + 1, f"Failed to read {lean_file.name}: {e}", ""))
+            yield ParseError(idx + 1, f"Failed to read {lean_file.name}: {e}", "")
             continue
 
         if not lean_code.strip():
-            errors.append(ParseError(idx + 1, f"Empty file: {lean_file.name}", ""))
+            yield ParseError(idx + 1, f"Empty file: {lean_file.name}", "")
             continue
 
         if header:
             lean_code = header.rstrip() + "\n" + lean_code
 
-        problems.append(Problem(
+        loaded += 1
+        yield Problem(
             id=lean_file.stem,
             source=source,
             lean_code=lean_code,
             metadata={"filename": lean_file.name},
-        ))
+        )
 
-    log.info("Loaded %d .lean files from %s", len(problems), directory)
-    return problems, errors
+    log.info("Loaded %d .lean files from %s", loaded, directory)
+
+
+def count_lean_files(directory: Path) -> int:
+    """Count .lean files for progress reporting."""
+    return sum(1 for _ in directory.glob("*.lean"))
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +389,16 @@ def load_hf(
     Returns:
         (problems, errors)
     """
+    return _collect_items(iter_hf(repo_id, split=split, header=header, source=source))
+
+
+def iter_hf(
+    repo_id: str,
+    split: str | None = None,
+    header: str | None = None,
+    source: str | None = None,
+) -> Iterator[DatasetItem]:
+    """Iterate over a HuggingFace dataset split, yielding Problem or ParseError in row order."""
     try:
         import datasets as ds_lib
     except ImportError:
@@ -359,49 +414,54 @@ def load_hf(
         source = repo_id.replace("/", "_")
 
     log.info("Loading HuggingFace dataset: %s", repo_id)
-    try:
-        ds = ds_lib.load_dataset(repo_id, trust_remote_code=True)
-    except Exception as e:
-        import sys
-        print(f"Error loading HuggingFace dataset {repo_id!r}: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Resolve split
     if split:
-        if split not in ds:
-            available = list(ds.keys())
+        effective_split = split
+    else:
+        try:
+            split_names = list(ds_lib.get_dataset_split_names(repo_id, trust_remote_code=True))
+        except Exception as e:
             import sys
             print(
-                f"Error: Split {split!r} not found in {repo_id}. "
-                f"Available: {available}",
+                f"Error loading HuggingFace split metadata for {repo_id!r}: {e}\n"
+                "Specify --split explicitly if metadata lookup is unavailable.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        effective_split = split
-    else:
-        if "test" in ds:
-            effective_split = "test"
-        else:
-            effective_split = list(ds.keys())[0]
+
+        if not split_names:
+            import sys
+            print(f"Error: No splits found in HuggingFace dataset {repo_id!r}", file=sys.stderr)
+            sys.exit(1)
+
+        effective_split = "test" if "test" in split_names else split_names[0]
         log.info("Auto-selected split: %s", effective_split)
 
-    data = ds[effective_split]
-    print(f"Loaded {len(data)} rows from {repo_id} (split={effective_split})")
+    try:
+        data = ds_lib.load_dataset(
+            repo_id,
+            split=effective_split,
+            streaming=True,
+            trust_remote_code=True,
+        )
+    except Exception as e:
+        import sys
+        print(
+            f"Error loading HuggingFace dataset {repo_id!r} split {effective_split!r}: {e}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    problems: list[Problem] = []
-    errors: list[ParseError] = []
+    print(f"Streaming rows from {repo_id} (split={effective_split})")
+
     strategy_counts: dict[str, int] = {}
 
     for idx, row in enumerate(data):
         try:
             resolved = resolve_row(dict(row), row_index=idx, header=header)
             strategy_counts[resolved.strategy] = strategy_counts.get(resolved.strategy, 0) + 1
-            problems.append(_resolved_to_problem(resolved, source))
+            yield _resolved_to_problem(resolved, source)
         except ValueError as e:
-            errors.append(ParseError(idx + 1, str(e), str(dict(row))[:200]))
+            yield ParseError(idx + 1, str(e), str(dict(row))[:200])
 
-    # Log strategy summary
     for strat, count in sorted(strategy_counts.items()):
         log.info("  Strategy %s: %d rows", strat, count)
-
-    return problems, errors

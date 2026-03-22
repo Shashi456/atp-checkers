@@ -325,13 +325,11 @@ class TestLoadHf(unittest.TestCase):
     def test_load_hf_with_mock(self):
         """Test HF loading with mocked datasets library."""
         mock_ds_module = MagicMock()
-        mock_dataset = {
-            "test": [
-                {"name": "thm1", "header": "import M\n", "formal_statement": "theorem t1 := sorry"},
-                {"name": "thm2", "header": "import M\n", "formal_statement": "theorem t2 := sorry"},
-            ],
-        }
-        mock_ds_module.load_dataset.return_value = mock_dataset
+        mock_ds_module.get_dataset_split_names.return_value = ["train", "test"]
+        mock_ds_module.load_dataset.return_value = iter([
+            {"name": "thm1", "header": "import M\n", "formal_statement": "theorem t1 := sorry"},
+            {"name": "thm2", "header": "import M\n", "formal_statement": "theorem t2 := sorry"},
+        ])
 
         with patch.dict("sys.modules", {"datasets": mock_ds_module}):
             problems, errors = load_hf("test-org/test-dataset", split="test")
@@ -340,6 +338,35 @@ class TestLoadHf(unittest.TestCase):
         self.assertEqual("thm1", problems[0].id)
         self.assertEqual("thm2", problems[1].id)
         self.assertIn("import M", problems[0].lean_code)
+        mock_ds_module.load_dataset.assert_called_once_with(
+            "test-org/test-dataset",
+            split="test",
+            streaming=True,
+            trust_remote_code=True,
+        )
+
+    def test_load_hf_auto_selects_test_split_via_metadata(self):
+        mock_ds_module = MagicMock()
+        mock_ds_module.get_dataset_split_names.return_value = ["validation", "test"]
+        mock_ds_module.load_dataset.return_value = iter([
+            {"name": "thm1", "header": "import M\n", "formal_statement": "theorem t1 := sorry"},
+        ])
+
+        with patch.dict("sys.modules", {"datasets": mock_ds_module}):
+            problems, errors = load_hf("test-org/test-dataset")
+
+        self.assertEqual(1, len(problems))
+        self.assertEqual(0, len(errors))
+        mock_ds_module.get_dataset_split_names.assert_called_once_with(
+            "test-org/test-dataset",
+            trust_remote_code=True,
+        )
+        mock_ds_module.load_dataset.assert_called_once_with(
+            "test-org/test-dataset",
+            split="test",
+            streaming=True,
+            trust_remote_code=True,
+        )
 
 
 if __name__ == "__main__":

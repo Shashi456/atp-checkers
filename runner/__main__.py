@@ -7,15 +7,30 @@ import json
 import logging
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-
-from .data_loader import load_jsonl, load_json, load_lean_dir, load_hf
-from .executor import run_batch, DEFAULT_TIMEOUT
-from .models import ParseError, LintResult, Provenance
 from datetime import datetime, timezone
+from typing import Iterable, Iterator
+
+from .data_loader import (
+    count_jsonl_entries,
+    count_lean_files,
+    iter_hf,
+    iter_json,
+    iter_jsonl,
+    iter_lean_dir,
+)
+from .persistent import run_batch as run_batch_persistent
+from .executor import run_batch as run_batch_subprocess
+from .parse import DEFAULT_TIMEOUT
+from .models import ParseError, LintResult, Problem, Provenance
 
 
-def main():
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run ATP checkers on a dataset of Lean problems",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -27,374 +42,403 @@ Examples:
   python -m runner ./lean_dir/ --format lean -w ./linter -o results/
         """,
     )
-    parser.add_argument(
-        "dataset",
-        type=str,
-        help="Dataset source: file path (jsonl/json), directory (lean), or HuggingFace repo ID (hf)",
-    )
-    parser.add_argument(
-        "--format", "-f",
-        type=str,
-        choices=["jsonl", "hf", "json", "lean"],
-        default="jsonl",
-        help="Dataset format (default: jsonl)",
-    )
-    parser.add_argument(
-        "--workspace", "-w",
-        type=Path,
-        required=True,
-        help="Path to pre-built Lean workspace with linter",
-    )
-    parser.add_argument(
-        "--output", "-o",
-        type=Path,
-        required=True,
-        help="Output directory for results",
-    )
-    parser.add_argument(
-        "--header-file",
-        type=Path,
-        default=None,
-        help="Path to a .lean file whose contents are prepended to every problem "
-             "(for headerless datasets that need import statements)",
-    )
-    parser.add_argument(
-        "--split",
-        type=str,
-        default=None,
-        help="Split to use for HuggingFace datasets (default: prefers 'test', then first available)",
-    )
-    parser.add_argument(
-        "--toolchain",
-        type=str,
-        default=None,
-        help="Lean toolchain string for provenance (default: read from workspace)",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=DEFAULT_TIMEOUT,
-        help=f"Timeout per problem in seconds (default: {DEFAULT_TIMEOUT})",
-    )
-    parser.add_argument(
-        "--workers", "-j",
-        type=int,
-        default=1,
-        help="Number of parallel workers (default: 1 = sequential)",
-    )
-    parser.add_argument(
-        "--append",
-        action="store_true",
-        help="Append to existing results.jsonl instead of failing if it exists",
-    )
-    parser.add_argument(
-        "--skip-existing",
-        action="store_true",
-        help="Skip problems already in results.jsonl (for resuming interrupted runs). "
-             "Assumes same toolchain; use fresh output dir for new runs.",
-    )
+    parser.add_argument("dataset", type=str,
+        help="Dataset source: file path (jsonl/json), directory (lean), or HuggingFace repo ID (hf)")
+    parser.add_argument("--format", "-f", type=str, choices=["jsonl", "hf", "json", "lean"],
+        default="jsonl", help="Dataset format (default: jsonl)")
+    parser.add_argument("--workspace", "-w", type=Path, required=True,
+        help="Path to pre-built Lean workspace with linter")
+    parser.add_argument("--output", "-o", type=Path, required=True,
+        help="Output directory for results")
+    parser.add_argument("--header-file", type=Path, default=None,
+        help="Path to a .lean file whose contents are prepended to every problem")
+    parser.add_argument("--split", type=str, default=None,
+        help="Split to use for HuggingFace datasets (default: prefers 'test', then first available)")
+    parser.add_argument("--toolchain", type=str, default=None,
+        help="Lean toolchain string for provenance (default: read from workspace)")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
+        help=f"Timeout per problem in seconds (default: {DEFAULT_TIMEOUT})")
+    parser.add_argument("--workers", "-j", type=int, default=1,
+        help="Number of parallel workers (default: 1 = sequential)")
+    parser.add_argument("--append", action="store_true",
+        help="Append to existing results.jsonl instead of failing if it exists")
+    parser.add_argument("--skip-existing", action="store_true",
+        help="Skip problems already in results.jsonl (for resuming interrupted runs)")
+    parser.add_argument("--backend", type=str, choices=["persistent", "subprocess"],
+        default="persistent",
+        help="Execution backend (default: persistent REPL, requires `lake build repl`; "
+             "subprocess: fallback/debug, spawns per-problem)")
+    return parser
 
-    args = parser.parse_args()
 
-    # Set up logging so data_loader info messages appear
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+# ---------------------------------------------------------------------------
+# Config resolution
+# ---------------------------------------------------------------------------
 
-    # Validate workspace
-    if not args.workspace.exists():
-        print(f"Error: Workspace not found: {args.workspace}", file=sys.stderr)
-        sys.exit(1)
 
-    # Read header file if provided
-    header = None
-    if args.header_file:
-        if not args.header_file.exists():
-            print(f"Error: Header file not found: {args.header_file}", file=sys.stderr)
-            sys.exit(1)
-        header = args.header_file.read_text(encoding="utf-8")
+@dataclass
+class _ResumeState:
+    existing_ids: set[str] = field(default_factory=set)
+    seen_load_error_ids: set[str] = field(default_factory=set)
+    processed: int = 0
+    stats: dict[str, int] = field(default_factory=lambda: {
+        "ok": 0, "findings": 0, "compile_error": 0, "timeout": 0, "infra_error": 0,
+    })
+    total_findings: int = 0
+    by_category: dict[str, dict[str, int]] = field(default_factory=dict)
+    by_confidence: dict[str, int] = field(default_factory=lambda: {"proven": 0, "maybe": 0})
+    by_proved_by: dict[str, int] = field(default_factory=dict)
 
-    # Read toolchain from workspace
+    def seed_from_result_json(self, data: dict) -> None:
+        self.processed += 1
+        status = data.get("status")
+        if status in self.stats:
+            self.stats[status] += 1
+
+        problem_id = str(data.get("problem_id", ""))
+        if problem_id.startswith("_load_error_line_"):
+            self.seen_load_error_ids.add(problem_id)
+        elif problem_id:
+            self.existing_ids.add(problem_id)
+
+        for finding in data.get("findings", []):
+            category = finding.get("category", "unknown")
+            confidence = finding.get("confidence", "maybe")
+            proved_by = finding.get("provedBy") or "none"
+
+            self.total_findings += 1
+            bucket = self.by_category.setdefault(category, {"total": 0, "proven": 0, "maybe": 0})
+            bucket["total"] += 1
+            bucket[confidence] = bucket.get(confidence, 0) + 1
+            self.by_confidence[confidence] = self.by_confidence.get(confidence, 0) + 1
+            self.by_proved_by[proved_by] = self.by_proved_by.get(proved_by, 0) + 1
+
+
+def _resume_key(data: dict) -> str | None:
+    problem_id = data.get("problem_id")
+    if problem_id is None:
+        return None
+    return str(problem_id)
+
+def _resolve_toolchain(args) -> str:
     workspace_toolchain = None
     toolchain_file = args.workspace / "lean-toolchain"
     if toolchain_file.exists():
         workspace_toolchain = toolchain_file.read_text().strip()
 
-    # Determine effective toolchain (strict enforcement)
     if args.toolchain is not None:
-        toolchain = args.toolchain
-        # Fail if it differs from workspace - mismatched toolchains produce unreliable results
-        if workspace_toolchain and workspace_toolchain != toolchain:
-            print(f"Error: --toolchain '{toolchain}' differs from workspace toolchain '{workspace_toolchain}'", file=sys.stderr)
-            print("       The workspace was built with a different toolchain. Results would be unreliable.", file=sys.stderr)
-            print("       Either rebuild the workspace with the specified toolchain, or omit --toolchain.", file=sys.stderr)
+        if workspace_toolchain and workspace_toolchain != args.toolchain:
+            print(f"Error: --toolchain '{args.toolchain}' differs from workspace '{workspace_toolchain}'", file=sys.stderr)
             sys.exit(1)
-    elif workspace_toolchain:
-        toolchain = workspace_toolchain
-    else:
-        print("Error: Could not determine toolchain. Specify --toolchain or ensure workspace has lean-toolchain file.", file=sys.stderr)
+        return args.toolchain
+    if workspace_toolchain:
+        return workspace_toolchain
+    print("Error: Could not determine toolchain.", file=sys.stderr)
+    sys.exit(1)
+
+
+def _resolve_header(args) -> str | None:
+    if not args.header_file:
+        return None
+    if not args.header_file.exists():
+        print(f"Error: Header file not found: {args.header_file}", file=sys.stderr)
         sys.exit(1)
+    return args.header_file.read_text(encoding="utf-8")
 
-    # Create output directory
-    args.output.mkdir(parents=True, exist_ok=True)
-    results_file = args.output / "results.jsonl"
-    logs_dir = args.output / "logs"
 
-    # Check if results file exists
-    if results_file.exists() and not args.append and not args.skip_existing:
-        print(f"Error: {results_file} already exists. Use --append to add to it, --skip-existing to resume, or remove the file.", file=sys.stderr)
-        sys.exit(1)
+def _load_existing_state(results_file: Path, toolchain: str) -> _ResumeState:
+    state = _ResumeState()
+    if not results_file.exists():
+        return state
+    print(f"Loading existing results from {results_file}...")
+    latest_by_key: dict[str, dict] = {}
+    with open(results_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                pass
+                continue
 
-    # Load existing problem IDs if resuming
-    existing_ids = set()
-    if args.skip_existing and results_file.exists():
-        print(f"Loading existing results from {results_file}...")
-        seen_toolchains = set()
-        with open(results_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    if "problem_id" in data:
-                        existing_ids.add(data["problem_id"])
-                    if "provenance" in data:
-                        prov = data["provenance"]
-                        if "lean_toolchain" in prov:
-                            seen_toolchains.add(prov["lean_toolchain"])
-                except json.JSONDecodeError:
-                    pass
-        print(f"Found {len(existing_ids)} already-processed problems")
+            key = _resume_key(data)
+            if key is None:
+                continue
+            latest_by_key[key] = data
 
-        # Warn about toolchain mismatches
-        if seen_toolchains and toolchain not in seen_toolchains:
-            print(f"Warning: Current toolchain '{toolchain}' differs from existing results: {seen_toolchains}", file=sys.stderr)
-            print("         Results may be inconsistent. Consider using a fresh output directory.", file=sys.stderr)
-        if len(seen_toolchains) > 1:
-            print(f"Warning: Existing results contain mixed toolchains: {seen_toolchains}", file=sys.stderr)
+    seen_toolchains = set()
+    for data in latest_by_key.values():
+        state.seed_from_result_json(data)
+        prov = data.get("provenance", {})
+        if "lean_toolchain" in prov:
+            seen_toolchains.add(prov["lean_toolchain"])
 
-    logs_dir.mkdir(exist_ok=True)
+    print(f"Found {len(state.existing_ids)} already-processed problems")
+    if seen_toolchains and toolchain not in seen_toolchains:
+        print(f"Warning: toolchain mismatch with existing results: {seen_toolchains}", file=sys.stderr)
+    if len(seen_toolchains) > 1:
+        print(f"Warning: existing results contain mixed toolchains: {seen_toolchains}", file=sys.stderr)
+    return state
 
-    # --- Load problems based on format ---
+
+# ---------------------------------------------------------------------------
+# Dataset loading
+# ---------------------------------------------------------------------------
+
+def _count_json_entries(path: Path) -> int | None:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError:
+        return 1
+    return len(data) if isinstance(data, list) else 1
+
+
+def _open_dataset_stream(args, header: str | None) -> tuple[Iterator[Problem | ParseError], str, int | None]:
     fmt = args.format
-    dataset_source = args.dataset  # used for error-result source field
+    source = args.dataset
 
     if fmt == "jsonl":
-        dataset_path = Path(args.dataset)
-        if not dataset_path.exists():
-            print(f"Error: Dataset not found: {dataset_path}", file=sys.stderr)
+        path = Path(args.dataset)
+        if not path.exists():
+            print(f"Error: Dataset not found: {path}", file=sys.stderr)
             sys.exit(1)
-        print(f"Loading problems from {dataset_path}...")
-        problems, load_errors = load_jsonl(dataset_path, header=header)
-        dataset_source = dataset_path.stem
+        print(f"Loading problems from {path}...")
+        return iter_jsonl(path, header=header), path.stem, count_jsonl_entries(path)
 
-    elif fmt == "json":
-        dataset_path = Path(args.dataset)
-        if not dataset_path.exists():
-            print(f"Error: Dataset not found: {dataset_path}", file=sys.stderr)
+    if fmt == "json":
+        path = Path(args.dataset)
+        if not path.exists():
+            print(f"Error: Dataset not found: {path}", file=sys.stderr)
             sys.exit(1)
-        print(f"Loading problems from {dataset_path} (JSON array)...")
-        problems, load_errors = load_json(dataset_path, header=header)
-        dataset_source = dataset_path.stem
+        print(f"Loading problems from {path} (JSON array)...")
+        return iter_json(path, header=header), path.stem, _count_json_entries(path)
 
-    elif fmt == "lean":
-        dataset_path = Path(args.dataset)
-        if not dataset_path.is_dir():
-            print(f"Error: Not a directory: {dataset_path}", file=sys.stderr)
+    if fmt == "lean":
+        path = Path(args.dataset)
+        if not path.is_dir():
+            print(f"Error: Not a directory: {path}", file=sys.stderr)
             sys.exit(1)
-        print(f"Loading .lean files from {dataset_path}/...")
-        problems, load_errors = load_lean_dir(dataset_path, header=header)
-        dataset_source = dataset_path.name
+        print(f"Loading .lean files from {path}/...")
+        return iter_lean_dir(path, header=header), path.name, max(count_lean_files(path), 1)
 
-    elif fmt == "hf":
-        print(f"Loading from HuggingFace: {args.dataset}...")
-        problems, load_errors = load_hf(
-            repo_id=args.dataset,
-            split=args.split,
-            header=header,
-        )
-        dataset_source = args.dataset.replace("/", "_")
+    # hf
+    print(f"Loading from HuggingFace: {args.dataset}...")
+    return iter_hf(repo_id=args.dataset, split=args.split, header=header), args.dataset.replace("/", "_"), None
 
-    if load_errors:
-        print(f"Warning: {len(load_errors)} entries could not be parsed:", file=sys.stderr)
-        for err in load_errors[:5]:
-            print(f"  Line {err.line_number}: {err.error}", file=sys.stderr)
-        if len(load_errors) > 5:
-            print(f"  ... and {len(load_errors) - 5} more", file=sys.stderr)
 
-    # Filter out already-processed problems if resuming
-    if existing_ids:
-        original_count = len(problems)
-        problems = [p for p in problems if p.id not in existing_ids]
-        skipped = original_count - len(problems)
-        if skipped > 0:
-            print(f"Skipping {skipped} already-processed problems")
+# ---------------------------------------------------------------------------
+# Result tracking (online counters)
+# ---------------------------------------------------------------------------
 
-    total = len(problems)
-    print(f"Loaded {total} problems to process")
-    print(f"Workspace: {args.workspace}")
-    print(f"Toolchain: {toolchain}")
-    print(f"Output: {results_file}")
-    print()
+class _ResultTracker:
+    def __init__(self, total_hint: int | None, results_fh, logs_dir: Path, resume_state: _ResumeState | None = None):
+        resume_state = resume_state or _ResumeState()
+        self.total_hint = total_hint
+        self.results_fh = results_fh
+        self.logs_dir = logs_dir
+        self.processed = resume_state.processed
+        self.stats = dict(resume_state.stats)
+        self.total_findings = resume_state.total_findings
+        self.by_category = {k: dict(v) for k, v in resume_state.by_category.items()}
+        self.by_confidence = dict(resume_state.by_confidence)
+        self.by_proved_by = dict(resume_state.by_proved_by)
 
-    # Track stats
-    stats = {"ok": 0, "findings": 0, "compile_error": 0, "timeout": 0, "infra_error": 0}
-    all_findings = []  # Collect all findings for summary
-    processed = 0
+    def on_result(self, result: LintResult) -> None:
+        self.processed += 1
+        self.stats[result.status] += 1
 
-    # Emit load errors as infra_error results (so totals match dataset size)
-    # Skip if resuming - load errors would have been emitted in the original run
-    if load_errors and not existing_ids:
-        load_provenance = Provenance(
-            lean_toolchain=toolchain,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
-        with open(results_file, "a", encoding="utf-8") as f:
-            for err in load_errors:
-                result = LintResult(
-                    problem_id=f"_load_error_line_{err.line_number}",
-                    source=dataset_source,
-                    status="infra_error",
-                    findings=[],
-                    error_message=f"Failed to load from dataset: {err.error}\nRaw: {err.raw_line[:500]}",
-                    duration_ms=0,
-                    provenance=load_provenance,
-                    metadata={},
-                )
-                f.write(result.to_jsonl() + "\n")
-                stats["infra_error"] += 1
-    elif load_errors and existing_ids:
-        # Resuming - load errors already emitted, just count them for display
-        stats["infra_error"] += len(load_errors)
+        for f in result.findings:
+            self.total_findings += 1
+            if f.category not in self.by_category:
+                self.by_category[f.category] = {"total": 0, "proven": 0, "maybe": 0}
+            self.by_category[f.category]["total"] += 1
+            self.by_category[f.category][f.confidence] += 1
+            self.by_confidence[f.confidence] = self.by_confidence.get(f.confidence, 0) + 1
+            key = f.proved_by or "none"
+            self.by_proved_by[key] = self.by_proved_by.get(key, 0) + 1
 
-    if total == 0 and not load_errors:
-        print("No problems to process.")
-        sys.exit(0)
+        # Progress
+        char = {"ok": ".", "findings": "F", "compile_error": "E",
+                "timeout": "T", "infra_error": "!"}.get(result.status, "?")
+        print(char, end="", flush=True)
+        if self.processed % 50 == 0:
+            if self.total_hint is not None:
+                print(f" [{self.processed}/{self.total_hint}]")
+            else:
+                print(f" [{self.processed}]")
 
-    # Run
-    print(f"Running linter with {args.workers} worker(s)...")
-    with open(results_file, "a", encoding="utf-8") as results_fh:
-        def on_result(result):
-            nonlocal processed
-            processed += 1
-            stats[result.status] += 1
+        # Write result
+        self.results_fh.write(result.to_jsonl() + "\n")
+        self.results_fh.flush()
 
-            # Collect findings for summary
-            all_findings.extend(result.findings)
+        # Log failures
+        if result.status in ("compile_error", "timeout", "infra_error"):
+            safe_source = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.source or "unknown")
+            safe_pid = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.problem_id)
+            log_file = self.logs_dir / f"{safe_source}_{safe_pid}_{result.status}.log"
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write(f"Problem: {result.problem_id}\nSource: {result.source}\n"
+                        f"Status: {result.status}\nDuration: {result.duration_ms}ms\n"
+                        f"\n--- Error ---\n{result.error_message or '(no error message)'}")
 
-            # Progress indicator
-            status_char = {
-                "ok": ".",
-                "findings": "F",
-                "compile_error": "E",
-                "timeout": "T",
-                "infra_error": "!",
-            }.get(result.status, "?")
-            print(status_char, end="", flush=True)
-            if processed % 50 == 0:
-                print(f" [{processed}/{total}]")
+    def summary_dict(self, dataset_source: str, toolchain: str) -> dict:
+        return {
+            "dataset": dataset_source,
+            "toolchain": toolchain,
+            "total_problems": self.total_hint if self.total_hint is not None else self.processed,
+            "status_counts": dict(self.stats),
+            "total_findings": self.total_findings,
+            "confidence_counts": self.by_confidence,
+            "findings_by_category": dict(sorted(self.by_category.items(), key=lambda x: x[1]["total"], reverse=True)),
+            "proved_by_counts": dict(sorted(self.by_proved_by.items(), key=lambda x: x[1], reverse=True)),
+        }
 
-            # Write result
-            results_fh.write(result.to_jsonl() + "\n")
-            results_fh.flush()
 
-            # Save logs for failures (include source to prevent collisions across datasets)
-            if result.status in ("compile_error", "timeout", "infra_error"):
-                safe_source = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.source or "unknown")
-                safe_pid = re.sub(r'[^a-zA-Z0-9_\-]', '_', result.problem_id)
-                log_file = logs_dir / f"{safe_source}_{safe_pid}_{result.status}.log"
-                with open(log_file, "w", encoding="utf-8") as f:
-                    f.write(f"Problem: {result.problem_id}\n")
-                    f.write(f"Source: {result.source}\n")
-                    f.write(f"Status: {result.status}\n")
-                    f.write(f"Duration: {result.duration_ms}ms\n")
-                    f.write(f"\n--- Error ---\n")
-                    f.write(result.error_message or "(no error message)")
-
-        asyncio.run(run_batch(
-            workspace=args.workspace,
-            problems=problems,
-            toolchain=toolchain,
-            timeout=args.timeout,
-            on_result=on_result,
-            workers=args.workers,
-        ))
-
-    # Build finding breakdowns
-    by_category = {}
-    by_confidence = {"proven": 0, "maybe": 0}
-    by_proved_by = {}
-    for f in all_findings:
-        # Category breakdown with confidence sub-counts
-        if f.category not in by_category:
-            by_category[f.category] = {"total": 0, "proven": 0, "maybe": 0}
-        by_category[f.category]["total"] += 1
-        by_category[f.category][f.confidence] += 1
-        # Overall confidence
-        by_confidence[f.confidence] = by_confidence.get(f.confidence, 0) + 1
-        # ProvedBy breakdown
-        key = f.proved_by or "none"
-        by_proved_by[key] = by_proved_by.get(key, 0) + 1
-
-    total_processed = total + len(load_errors)
-
-    # Build summary dict
-    summary = {
-        "dataset": dataset_source,
-        "toolchain": toolchain,
-        "total_problems": total_processed,
-        "status_counts": {
-            "ok": stats["ok"],
-            "findings": stats["findings"],
-            "compile_error": stats["compile_error"],
-            "timeout": stats["timeout"],
-            "infra_error": stats["infra_error"],
-        },
-        "total_findings": len(all_findings),
-        "confidence_counts": by_confidence,
-        "findings_by_category": dict(sorted(by_category.items(), key=lambda x: x[1]["total"], reverse=True)),
-        "proved_by_counts": dict(sorted(by_proved_by.items(), key=lambda x: x[1], reverse=True)),
-    }
-
-    # Write summary.json
-    summary_file = args.output / "summary.json"
-    with open(summary_file, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
-
-    # Print summary
+def _print_summary(tracker: _ResultTracker) -> None:
+    total_processed = tracker.total_hint if tracker.total_hint is not None else tracker.processed
     print()
     print()
     print("=" * 50)
     print("Summary")
     print("=" * 50)
     print(f"Total problems:  {total_processed}")
-    print(f"  OK:            {stats['ok']}")
-    print(f"  Findings:      {stats['findings']}")
-    print(f"  Compile Error: {stats['compile_error']}")
-    print(f"  Timeout:       {stats['timeout']}")
-    print(f"  Infra Error:   {stats['infra_error']}", end="")
-    if load_errors:
-        print(f" ({len(load_errors)} from bad dataset lines)")
-    else:
-        print()
+    print(f"  OK:            {tracker.stats['ok']}")
+    print(f"  Findings:      {tracker.stats['findings']}")
+    print(f"  Compile Error: {tracker.stats['compile_error']}")
+    print(f"  Timeout:       {tracker.stats['timeout']}")
+    print(f"  Infra Error:   {tracker.stats['infra_error']}")
 
-    if all_findings:
+    if tracker.total_findings:
         print()
-        print(f"Total findings:  {len(all_findings)}")
-        print(f"  Proven:        {by_confidence.get('proven', 0)}")
-        print(f"  Maybe:         {by_confidence.get('maybe', 0)}")
+        print(f"Total findings:  {tracker.total_findings}")
+        print(f"  Proven:        {tracker.by_confidence.get('proven', 0)}")
+        print(f"  Maybe:         {tracker.by_confidence.get('maybe', 0)}")
         print()
         print("Findings by category:")
-        for cat, counts in sorted(by_category.items(), key=lambda x: x[1]["total"], reverse=True):
+        for cat, counts in sorted(tracker.by_category.items(), key=lambda x: x[1]["total"], reverse=True):
             print(f"  {cat:<40} {counts['total']:>4}  (proven: {counts['proven']}, maybe: {counts['maybe']})")
         print()
         print("Proved by:")
-        for method, count in sorted(by_proved_by.items(), key=lambda x: x[1], reverse=True):
+        for method, count in sorted(tracker.by_proved_by.items(), key=lambda x: x[1], reverse=True):
             print(f"  {method:<20} {count:>4}")
 
+
+def _make_load_error_result(err: ParseError, dataset_source: str, toolchain: str) -> LintResult:
+    return LintResult(
+        problem_id=f"_load_error_line_{err.line_number}",
+        source=dataset_source,
+        status="infra_error",
+        findings=[],
+        error_message=f"Failed to load: {err.error}\nRaw: {err.raw_line[:500]}",
+        duration_ms=0,
+        provenance=Provenance(
+            lean_toolchain=toolchain,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ),
+        metadata={},
+    )
+
+
+def _iter_runnable_problems(
+    items: Iterable[Problem | ParseError],
+    tracker: _ResultTracker,
+    dataset_source: str,
+    toolchain: str,
+    resume_state: _ResumeState,
+) -> Iterator[Problem]:
+    for item in items:
+        if isinstance(item, ParseError):
+            result = _make_load_error_result(item, dataset_source, toolchain)
+            if result.problem_id not in resume_state.seen_load_error_ids:
+                tracker.on_result(result)
+            continue
+
+        if item.id in resume_state.existing_ids:
+            continue
+
+        yield item
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    args = _build_parser().parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    if not args.workspace.exists():
+        print(f"Error: Workspace not found: {args.workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    toolchain = _resolve_toolchain(args)
+    header = _resolve_header(args)
+
+    # Output setup
+    args.output.mkdir(parents=True, exist_ok=True)
+    results_file = args.output / "results.jsonl"
+    logs_dir = args.output / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
+    if results_file.exists() and not args.append and not args.skip_existing:
+        print(f"Error: {results_file} already exists. Use --append or --skip-existing.", file=sys.stderr)
+        sys.exit(1)
+
+    resuming = args.skip_existing and results_file.exists()
+    resume_state = _load_existing_state(results_file, toolchain) if resuming else _ResumeState()
+
+    items, dataset_source, total_hint = _open_dataset_stream(args, header)
+    if total_hint == 0:
+        print("No problems to process.")
+        sys.exit(0)
+
+    if resume_state.existing_ids:
+        print(f"Resuming with {len(resume_state.existing_ids)} previously processed problems")
+    if total_hint is not None:
+        print(f"Loaded dataset with {total_hint} entries")
+    else:
+        print("Loaded dataset stream")
+    print(f"Workspace: {args.workspace}")
+    print(f"Toolchain: {toolchain}")
+    print(f"Output: {results_file}")
+    print()
+
+    # Run
+    mode = f"persistent REPL ({args.workers} worker(s))" if args.backend == "persistent" \
+        else f"subprocess ({args.workers} worker(s))"
+    print(f"Running linter [{mode}]...")
+
+    with open(results_file, "a", encoding="utf-8") as results_fh:
+        tracker = _ResultTracker(total_hint, results_fh, logs_dir, resume_state=resume_state)
+        problems = _iter_runnable_problems(items, tracker, dataset_source, toolchain, resume_state)
+
+        if args.backend == "persistent":
+            asyncio.run(run_batch_persistent(
+                workspace=args.workspace, problems=problems, toolchain=toolchain,
+                timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
+                collect_results=False,
+            ))
+        else:
+            asyncio.run(run_batch_subprocess(
+                workspace=args.workspace, problems=problems, toolchain=toolchain,
+                timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
+                collect_results=False,
+            ))
+
+    # Summary
+    summary = tracker.summary_dict(dataset_source, toolchain)
+    summary_file = args.output / "summary.json"
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    _print_summary(tracker)
     print()
     print(f"Results:  {results_file}")
     print(f"Summary:  {summary_file}")
-    if stats['compile_error'] + stats['timeout'] + stats['infra_error'] > 0:
+    if tracker.stats["compile_error"] + tracker.stats["timeout"] + tracker.stats["infra_error"] > 0:
         print(f"Logs:     {logs_dir}/")
 
 

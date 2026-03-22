@@ -37,12 +37,14 @@ atp-checkers/
 ├── test/
 │   ├── AllTests.lean          # Hub: imports all 7 gating test modules
 │   └── ...                    # 7 gating + 3 demo test files
-├── runner/                    # Python JSONL batch execution pipeline
-│   ├── __main__.py
-│   ├── executor.py
-│   ├── loader.py
-│   └── models.py
-├── runner_tests/              # Python runner unit tests
+├── runner/                    # Python batch execution pipeline
+│   ├── __main__.py            # CLI entrypoint
+│   ├── persistent.py          # Default backend: persistent REPL worker pool
+│   ├── executor.py            # Fallback backend: subprocess per problem
+│   ├── parse.py               # Shared parsing helpers (ATP sentinels)
+│   ├── data_loader.py         # Dataset loading (JSONL, JSON, lean dir, HuggingFace)
+│   └── models.py              # Data models (Problem, Finding, LintResult)
+├── runner_tests/              # Python runner unit + e2e tests
 └── datasets/
     └── examples/              # Minimal test datasets
 ```
@@ -51,11 +53,19 @@ atp-checkers/
 
 ```bash
 lake build                    # Build linter (36 jobs)
+lake build repl               # Build REPL (needed for default persistent backend)
 lake build AtpLinterTest      # Run gating tests
 lake build AtpLinterDemo      # Run demo tests (non-gating)
 
+# Default: persistent REPL backend (fast, ~1-3s/problem after startup)
 python3 -m runner datasets/examples/minimal_no_mathlib.jsonl \
   --workspace . --output out --timeout 60
+
+# Parallel execution
+python3 -m runner my_benchmark.jsonl -w . -o results -j 4
+
+# Fallback subprocess backend (slower, no REPL needed)
+python3 -m runner my_benchmark.jsonl -w . -o results --backend subprocess
 ```
 
 ---
@@ -211,14 +221,15 @@ Key per checker: `(operandStr1, operandStr2, guardEvidence.isSome)` — varies s
 
 ## Runner Pipeline
 
-The Python runner (`runner/`) wraps each problem's `lean_code` with:
-```
-import AtpLinter
-<lean_code>
-#check_atp_all
-```
+Two execution backends:
 
-Writes to a temp file, runs `lake env lean <file>`, parses `ATP_LINT:` / `ATP_DONE:` sentinels from stdout.
+- **persistent** (default): keeps Lean REPL processes alive, caches import environments.
+  ~22s startup, then ~1-3s per problem. Requires `lake build repl`.
+- **subprocess** (fallback): spawns `lake env lean <tempfile>` per problem. ~22s per
+  problem with Mathlib. Use `--backend subprocess` for debugging.
+
+Both backends wrap each problem's `lean_code` with `import AtpLinter` + `#check_atp_all`
+and parse `ATP_LINT:` / `ATP_DONE:` sentinels from output.
 
 **Output schema** (`results.jsonl`):
 ```json

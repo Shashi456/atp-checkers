@@ -12,8 +12,9 @@ levels on every finding.
 ## Quick Start
 
 ```bash
-# Build the linter
+# Build the linter and REPL (needed for the default persistent backend)
 lake build
+lake build repl
 
 # Run tests
 lake build AtpLinterTest
@@ -82,11 +83,17 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--backend` | `persistent` | Execution backend: `persistent` (REPL, fast) or `subprocess` (fallback/debug) |
 | `--timeout` | 30 | Timeout per problem in seconds |
 | `--workers, -j` | 1 | Number of parallel workers |
 | `--append` | off | Append to existing `results.jsonl` instead of failing |
 | `--skip-existing` | off | Resume interrupted runs (skips already-processed problem IDs) |
 | `--toolchain` | auto | Lean toolchain string (auto-detected from workspace) |
+
+The default `persistent` backend keeps Lean REPL processes alive across problems,
+avoiding repeated Mathlib import cost (~22s → ~1-3s per problem). Requires
+`lake build repl` in the workspace. Use `--backend subprocess` as a fallback
+if the REPL is unavailable.
 
 ### Examples
 
@@ -94,8 +101,11 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 # Quick smoke test (no Mathlib needed)
 python -m runner datasets/examples/minimal_no_mathlib.jsonl -w . -o out --timeout 60
 
-# Full benchmark run with parallelism
-python -m runner my_benchmark.jsonl -w . -o results --workers 8 --timeout 120
+# Full benchmark run with parallelism (persistent REPL, default)
+python -m runner my_benchmark.jsonl -w . -o results -j 4 --timeout 120
+
+# Fallback to subprocess mode (slower, no REPL needed)
+python -m runner my_benchmark.jsonl -w . -o results -j 4 --backend subprocess
 
 # Resume an interrupted run
 python -m runner my_benchmark.jsonl -w . -o results --skip-existing --append

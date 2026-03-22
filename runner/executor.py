@@ -1,25 +1,27 @@
-"""Lean execution logic for the ATP checkers runner."""
+"""Subprocess backend for the ATP checkers runner (fallback/debug).
+
+Spawns a fresh `lake env lean` process per problem. Slow for Mathlib-heavy
+datasets due to repeated import cost. Use the persistent backend (default)
+for production runs.
+"""
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import os
 import re
 import signal
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterable, Optional
 
-from .models import Problem, Finding, LintResult, Provenance
-
-
-# Sentinel prefixes used by the Lean linter
-SENTINEL_LINT = "ATP_LINT:"
-SENTINEL_DONE = "ATP_DONE"
-
-DEFAULT_TIMEOUT = 30  # seconds
+from .models import Problem, LintResult, Provenance
+from .parse import (
+    parse_lint_output,
+    has_done_sentinel,
+    make_provenance,
+    DEFAULT_TIMEOUT,
+)
 
 
 def _sanitize_id_for_lean(problem_id: str) -> str:
@@ -58,47 +60,6 @@ def wrap_with_linter(lean_code: str) -> str:
 #check_atp_all
 """
 
-
-def parse_lint_output(stdout: str) -> Tuple[list[Finding], list[str]]:
-    """
-    Parse linter output from stdout.
-
-    Returns:
-        (findings, parse_errors)
-    """
-    findings = []
-    parse_errors = []
-
-    for line in stdout.splitlines():
-        if line.startswith(SENTINEL_LINT):
-            json_str = line[len(SENTINEL_LINT):]
-            try:
-                data = json.loads(json_str)
-                findings.append(Finding.from_dict(data))
-            except json.JSONDecodeError as e:
-                parse_errors.append(f"Malformed ATP_LINT JSON: {e} in: {json_str[:100]}")
-
-    return findings, parse_errors
-
-
-def has_done_sentinel(stdout: str) -> Tuple[bool, Optional[dict]]:
-    """
-    Check if ATP_DONE sentinel is present and parse its metadata.
-
-    Returns:
-        (found, metadata_dict)
-    """
-    for line in stdout.splitlines():
-        if line.startswith(SENTINEL_DONE):
-            # Try to parse the JSON metadata after ATP_DONE:
-            rest = line[len(SENTINEL_DONE):]
-            if rest.startswith(":"):
-                try:
-                    return True, json.loads(rest[1:])
-                except json.JSONDecodeError:
-                    return True, None
-            return True, None
-    return False, None
 
 
 async def lint_problem(
@@ -322,20 +283,17 @@ def _cleanup_problem_artifacts(workspace: Path, file_stem: str):
 
 
 def _make_provenance(toolchain: str) -> Provenance:
-    """Create provenance record."""
-    return Provenance(
-        lean_toolchain=toolchain,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-    )
+    return make_provenance(toolchain)
 
 
 async def run_batch(
     workspace: Path,
-    problems: list[Problem],
+    problems: Iterable[Problem],
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
     on_result: Optional[callable] = None,
     workers: int = 1,
+    collect_results: bool = True,
 ) -> list[LintResult]:
     """
     Run linter on a batch of problems with optional parallelism.
@@ -353,34 +311,56 @@ async def run_batch(
     """
     if workers <= 1:
         # Sequential execution
-        results = []
+        results: list[LintResult] = []
         for idx, problem in enumerate(problems):
             result = await lint_problem(workspace, problem, toolchain, timeout, row_index=idx)
-            results.append(result)
+            if collect_results:
+                results.append(result)
             if on_result:
                 on_result(result)
         return results
     else:
-        # Parallel execution with semaphore, streaming results in dataset order
-        semaphore = asyncio.Semaphore(workers)
-        result_slots: list[LintResult | None] = [None] * len(problems)
-        next_emit = 0  # index of next result to emit in order
+        # Parallel execution with a bounded in-flight window, streaming results in dataset order
+        window = max(1, workers * 4)
+        result_slots: dict[int, LintResult] = {}
+        next_emit = 0
         results: list[LintResult] = []
-        emit_lock = asyncio.Lock()
+        in_flight: set[asyncio.Task] = set()
+        problem_iter = iter(problems)
+        next_idx = 0
+        exhausted = False
 
         async def process_one(idx: int, problem: Problem):
-            nonlocal next_emit
-            async with semaphore:
-                result_slots[idx] = await lint_problem(
-                    workspace, problem, toolchain, timeout, row_index=idx
-                )
-            # Emit all consecutive ready results starting from next_emit
-            async with emit_lock:
-                while next_emit < len(result_slots) and result_slots[next_emit] is not None:
-                    results.append(result_slots[next_emit])  # type: ignore[arg-type]
-                    if on_result:
-                        on_result(result_slots[next_emit])
-                    next_emit += 1
+            result_slots[idx] = await lint_problem(
+                workspace, problem, toolchain, timeout, row_index=idx
+            )
 
-        await asyncio.gather(*[process_one(i, p) for i, p in enumerate(problems)])
+        def emit_ready() -> None:
+            nonlocal next_emit
+            while next_emit in result_slots:
+                result = result_slots.pop(next_emit)
+                if collect_results:
+                    results.append(result)
+                if on_result:
+                    on_result(result)
+                next_emit += 1
+
+        while not exhausted or in_flight:
+            while not exhausted and len(in_flight) < window:
+                try:
+                    problem = next(problem_iter)
+                except StopIteration:
+                    exhausted = True
+                    break
+                task = asyncio.create_task(process_one(next_idx, problem))
+                in_flight.add(task)
+                next_idx += 1
+
+            if in_flight:
+                done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+                emit_ready()
+
+        emit_ready()
         return results

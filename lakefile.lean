@@ -6,6 +6,9 @@ package «atp-checkers» where
 require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git" @ "v4.29.0-rc6"
 
+require repl from git
+  "https://github.com/leanprover-community/repl" @ "v4.29.0-rc6"
+
 
 lean_lib «AtpLinter» where
   srcDir := "src"

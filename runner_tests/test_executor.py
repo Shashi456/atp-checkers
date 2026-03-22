@@ -249,6 +249,34 @@ class ExecutorAsyncTests(unittest.TestCase):
 
         self.run_async(run())
 
+    def test_run_batch_collect_results_false_streams_only(self):
+        async def run():
+            problems = [
+                Problem(id="a", source="src", lean_code="def a : Nat := 0", metadata={}),
+                Problem(id="b", source="src", lean_code="def b : Nat := 0", metadata={}),
+            ]
+            seen = []
+
+            async def fake_lint(workspace, problem, toolchain, timeout, row_index=0):
+                return _mk_result(problem)
+
+            with tempfile.TemporaryDirectory() as td:
+                workspace = Path(td)
+                with patch("runner.executor.lint_problem", side_effect=fake_lint):
+                    results = await run_batch(
+                        workspace,
+                        problems,
+                        "leanprover/lean4:v4.24.0",
+                        workers=1,
+                        on_result=seen.append,
+                        collect_results=False,
+                    )
+
+            self.assertEqual([], results)
+            self.assertEqual(["a", "b"], [result.problem_id for result in seen])
+
+        self.run_async(run())
+
 
 if __name__ == "__main__":
     unittest.main()
