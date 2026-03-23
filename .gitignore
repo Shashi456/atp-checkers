@@ -13,6 +13,7 @@ _Problem_*.lean
 out/
 results/
 datasets/generated/
+local/
 
 # Python
 __pycache__/

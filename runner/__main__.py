@@ -22,7 +22,7 @@ from .data_loader import (
 )
 from .persistent import run_batch as run_batch_persistent
 from .executor import run_batch as run_batch_subprocess
-from .models import DEFAULT_TIMEOUT
+from .models import DEFAULT_TIMEOUT, RESULT_SCHEMA_VERSION
 from .models import ParseError, LintResult, Problem, Provenance
 
 
@@ -234,11 +234,22 @@ def _open_dataset_stream(args, header: str | None) -> tuple[Iterator[Problem | P
 # ---------------------------------------------------------------------------
 
 class _ResultTracker:
-    def __init__(self, total_hint: int | None, results_fh, logs_dir: Path, resume_state: _ResumeState | None = None):
+    def __init__(
+        self,
+        total_hint: int | None,
+        results_fh,
+        logs_dir: Path,
+        *,
+        dataset_name: str = "",
+        run_id: str = "",
+        resume_state: _ResumeState | None = None,
+    ):
         resume_state = resume_state or _ResumeState()
         self.total_hint = total_hint
         self.results_fh = results_fh
         self.logs_dir = logs_dir
+        self.dataset_name = dataset_name
+        self.run_id = run_id
         self.processed = resume_state.processed
         self.stats = dict(resume_state.stats)
         self.compile_errors = resume_state.compile_errors
@@ -249,6 +260,8 @@ class _ResultTracker:
         self.by_proved_by = dict(resume_state.by_proved_by)
 
     def on_result(self, result: LintResult) -> None:
+        result.dataset = self.dataset_name
+        result.run_id = self.run_id
         self.processed += 1
         self.stats[result.status] = self.stats.get(result.status, 0) + 1
         if result.compile_error:
@@ -303,6 +316,8 @@ class _ResultTracker:
 
     def summary_dict(self, dataset_source: str, toolchain: str) -> dict:
         return {
+            "schema_version": RESULT_SCHEMA_VERSION,
+            "run_id": self.run_id,
             "dataset": dataset_source,
             "toolchain": toolchain,
             "total_problems": self.total_hint if self.total_hint is not None else self.processed,
@@ -418,6 +433,8 @@ def main():
     resume_state = _load_existing_state(results_file, toolchain) if resuming else _ResumeState()
 
     items, dataset_source, total_hint = _open_dataset_stream(args, header)
+    run_started_at = datetime.now(timezone.utc).isoformat()
+    run_id = f"{args.output.name}:{run_started_at}"
     if total_hint == 0:
         print("No problems to process.")
         sys.exit(0)
@@ -433,13 +450,46 @@ def main():
     print(f"Output: {results_file}")
     print()
 
+    run_manifest = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "started_at": run_started_at,
+        "dataset": {
+            "input": args.dataset,
+            "resolved_name": dataset_source,
+            "format": args.format,
+            "split": args.split,
+            "header_file": str(args.header_file) if args.header_file else None,
+            "total_hint": total_hint,
+        },
+        "execution": {
+            "workspace": str(args.workspace),
+            "toolchain": toolchain,
+            "backend": args.backend,
+            "workers": args.workers,
+            "timeout": args.timeout,
+            "output_dir": str(args.output),
+            "resuming": resuming,
+        },
+    }
+    run_file = args.output / "run.json"
+    with open(run_file, "w", encoding="utf-8") as f:
+        json.dump(run_manifest, f, indent=2, ensure_ascii=False)
+
     # Run
     mode = f"persistent REPL ({args.workers} worker(s))" if args.backend == "persistent" \
         else f"subprocess ({args.workers} worker(s))"
     print(f"Running linter [{mode}]...")
 
     with open(results_file, "a", encoding="utf-8") as results_fh:
-        tracker = _ResultTracker(total_hint, results_fh, logs_dir, resume_state=resume_state)
+        tracker = _ResultTracker(
+            total_hint,
+            results_fh,
+            logs_dir,
+            dataset_name=dataset_source,
+            run_id=run_id,
+            resume_state=resume_state,
+        )
         problems = _iter_runnable_problems(items, tracker, dataset_source, toolchain, resume_state)
 
         if args.backend == "persistent":
@@ -464,6 +514,7 @@ def main():
     _print_summary(tracker)
     print()
     print(f"Results:  {results_file}")
+    print(f"Run:      {run_file}")
     print(f"Summary:  {summary_file}")
     if tracker.compile_errors + tracker.stats["timeout"] + tracker.stats["infra_error"] > 0:
         print(f"Logs:     {logs_dir}/")

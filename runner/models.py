@@ -15,6 +15,7 @@ SENTINEL_LINT = "ATP_LINT:"
 SENTINEL_DONE = "ATP_DONE"
 
 DEFAULT_TIMEOUT = 30
+RESULT_SCHEMA_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -79,10 +80,15 @@ class LintResult:
     provenance: Provenance
     compile_error: bool = False
     compile_error_message: Optional[str] = None
+    dataset: Optional[str] = None
+    run_id: Optional[str] = None
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": RESULT_SCHEMA_VERSION,
+            "dataset": self.dataset,
+            "run_id": self.run_id,
             "problem_id": self.problem_id,
             "source": self.source,
             "status": self.status,
