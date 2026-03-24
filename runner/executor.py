@@ -37,22 +37,49 @@ _LEAN_ENV_LOCK = threading.Lock()
 _LEAN_ENV_CACHE: dict[Path, tuple[tuple[str, ...], dict[str, str]]] = {}
 _LEAN_ENV_FAILURES: dict[Path, float] = {}
 _IMPORT_CACHE_LOCK = threading.Lock()
-_IMPORT_MODULE_CACHE: dict[tuple[Path, tuple[str, ...]], str] = {}
-_IMPORT_MODULE_FAILURES: dict[tuple[Path, tuple[str, ...]], float] = {}
-_IMPORT_MODULE_LOCKS: dict[tuple[Path, tuple[str, ...]], threading.Lock] = {}
+_IMPORT_MODULE_CACHE: dict[tuple[Path, tuple[str, ...], tuple[str, ...]], str] = {}
+_IMPORT_MODULE_FAILURES: dict[tuple[Path, tuple[str, ...], tuple[str, ...]], float] = {}
+_IMPORT_MODULE_LOCKS: dict[tuple[Path, tuple[str, ...], tuple[str, ...]], threading.Lock] = {}
 
 
 def _cache_root(workspace: Path) -> Path:
     return workspace.resolve() / ".atp_import_cache"
 
 
-def _augment_lean_env(workspace: Path, env: dict[str, str]) -> dict[str, str]:
+def _normalize_extra_lean_paths(extra_paths: object) -> tuple[str, ...]:
+    if not isinstance(extra_paths, (list, tuple)):
+        return ()
+    normalized: list[str] = []
+    for item in extra_paths:
+        if not isinstance(item, str):
+            continue
+        path = item.strip()
+        if path:
+            normalized.append(path)
+    return tuple(normalized)
+
+
+def _env_extra_lean_paths() -> tuple[str, ...]:
+    raw = os.environ.get("ATP_EXTRA_LEAN_PATHS", "")
+    if not raw:
+        return ()
+    return tuple(path for path in raw.split(os.pathsep) if path)
+
+
+def _augment_lean_env(
+    workspace: Path,
+    env: dict[str, str],
+    extra_paths: tuple[str, ...] = (),
+) -> dict[str, str]:
     augmented = dict(env)
     cache_root = str(_cache_root(workspace))
     lean_path = augmented.get("LEAN_PATH", "")
-    paths = [p for p in lean_path.split(os.pathsep) if p]
-    if cache_root not in paths:
-        augmented["LEAN_PATH"] = os.pathsep.join([cache_root, *paths]) if paths else cache_root
+    existing_paths = [p for p in lean_path.split(os.pathsep) if p]
+    merged: list[str] = []
+    for path in (cache_root, *extra_paths, *existing_paths):
+        if path not in merged:
+            merged.append(path)
+    augmented["LEAN_PATH"] = os.pathsep.join(merged)
     return augmented
 
 
@@ -66,6 +93,7 @@ def _ensure_import_bundle(
     imports: tuple[str, ...],
     lean_cmd: tuple[str, ...] | None,
     lean_env: dict[str, str] | None,
+    extra_paths: tuple[str, ...] = (),
 ) -> str | None:
     if lean_cmd is None or lean_env is None or len(lean_cmd) != 1:
         log.debug("Skipping import-bundle cache: unsupported Lean command %r", lean_cmd)
@@ -79,7 +107,7 @@ def _ensure_import_bundle(
 
     workspace = workspace.resolve()
     normalized_imports = normalize_imports(imports)
-    key = (workspace, normalized_imports)
+    key = (workspace, normalized_imports, extra_paths)
     now = time.monotonic()
     with _IMPORT_CACHE_LOCK:
         cached = _IMPORT_MODULE_CACHE.get(key)
@@ -212,6 +240,14 @@ def _sanitize_id_for_lean(problem_id: str) -> str:
     return f"{safe}_{id_hash}"
 
 
+def _problem_extra_lean_paths(problem: Problem) -> tuple[str, ...]:
+    merged: list[str] = []
+    for path in (*_env_extra_lean_paths(), *_normalize_extra_lean_paths(problem.metadata.get("extra_lean_paths"))):
+        if path not in merged:
+            merged.append(path)
+    return tuple(merged)
+
+
 def wrap_with_linter(lean_code: str) -> str:
     """Wrap problem code with linter import and check command.
 
@@ -255,13 +291,17 @@ async def lint_problem(
     preamble, _body = split_preamble(problem.lean_code)
     imports, _directives = partition_preamble(preamble)
     import_module = None
+    extra_paths = _problem_extra_lean_paths(problem)
+    problem_lean_env = None
     if lean_cmd is not None and lean_env is not None:
+        problem_lean_env = _augment_lean_env(workspace, lean_env, extra_paths)
         import_module = await asyncio.to_thread(
             _ensure_import_bundle,
             workspace,
             imports,
             lean_cmd,
-            lean_env,
+            problem_lean_env,
+            extra_paths,
         )
     try:
         problem_file.write_text(render_problem_source(problem.lean_code, import_module=import_module), encoding="utf-8")
@@ -284,15 +324,19 @@ async def lint_problem(
             resolved = await _resolve_direct_lean_async(workspace)
             if resolved is not None:
                 lean_cmd, lean_env = resolved
+        if lean_env is not None:
+            problem_lean_env = _augment_lean_env(workspace, lean_env, extra_paths)
         if lean_cmd is None:
             lean_cmd = ("lake", "env", "lean")
-            lean_env = None
+            if extra_paths:
+                problem_lean_env = _augment_lean_env(workspace, dict(os.environ), extra_paths)
+                log.debug("Extra Lean paths injected into lake env lean fallback: %s", extra_paths)
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *lean_cmd, problem_file.name,
                 cwd=workspace,
-                env=lean_env,
+                env=problem_lean_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,

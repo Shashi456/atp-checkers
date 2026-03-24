@@ -12,9 +12,8 @@ levels on every finding.
 ## Quick Start
 
 ```bash
-# Build the linter and REPL (needed for the default persistent backend)
+# Build the linter
 lake build
-lake build repl
 
 # Run tests
 lake build AtpLinterTest
@@ -83,17 +82,22 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--backend` | `persistent` | Execution backend: `persistent` (REPL, fast) or `subprocess` (fallback/debug) |
+| `--backend` | `subprocess` | Execution backend: `subprocess` (default, resolves lean env once) or `persistent` (REPL, requires `lake build repl`) |
 | `--timeout` | 30 | Timeout per problem in seconds |
 | `--workers, -j` | 1 | Number of parallel workers |
 | `--append` | off | Append to existing `results.jsonl` instead of failing |
 | `--skip-existing` | off | Resume interrupted runs (skips already-processed problem IDs) |
 | `--toolchain` | auto | Lean toolchain string (auto-detected from workspace) |
 
-The default `persistent` backend keeps Lean REPL processes alive across problems,
-avoiding repeated Mathlib import cost (~22s → ~1-3s per problem). Requires
-`lake build repl` in the workspace. Use `--backend subprocess` as a fallback
-if the REPL is unavailable.
+The default `subprocess` backend resolves the workspace Lean environment once
+and invokes the Lean binary directly per problem, with import-bundle caching
+to avoid repeated import cost. Use `--backend persistent` for REPL-based
+execution (requires `lake build repl`).
+
+**Extra Lean search paths:** For datasets that depend on modules outside the
+workspace (e.g., a local Mathlib fork or companion repo), set the
+`ATP_EXTRA_LEAN_PATHS` environment variable (colon-separated) or include
+`"extra_lean_paths": ["/path/to/lib"]` in each problem's metadata.
 
 ### Examples
 

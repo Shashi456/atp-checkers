@@ -235,7 +235,8 @@ class ExecutorAsyncTests(unittest.TestCase):
             self.assertEqual("/tmp/lean", seen["args"][0])
             self.assertTrue(seen["args"][1].startswith("_Problem_0_p2_"))
             self.assertTrue(seen["args"][1].endswith(".lean"))
-            self.assertEqual({"LEAN": "/tmp/lean"}, seen["env"])
+            self.assertEqual("/tmp/lean", seen["env"]["LEAN"])
+            self.assertIn(".atp_import_cache", seen["env"].get("LEAN_PATH", ""))
 
         self.run_async(run())
 
