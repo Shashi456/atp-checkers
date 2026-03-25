@@ -26,8 +26,11 @@ import Lean.Meta.Tactic.Simp.Main
 import Lean.Elab.Tactic.FalseOrByContra
 import Lean.Elab.Tactic.Omega
 import Lean.Meta.Tactic.Grind
+import AtpLinter.Basic
+import Mathlib.Tactic.Positivity.Core
 
 open Lean Meta
+open Qq
 
 namespace AtpLinter
 namespace SemanticGuards
@@ -227,6 +230,37 @@ private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) : MetaM (Op
   catch _ => return none
   finally saved.restore
 
+
+/-- Try to close a positivity-shaped goal using Mathlib's positivity engine. -/
+private def tryPositivity? (goal : Expr) : MetaM (Option ProvedBy) := do
+  let saved ← Meta.saveState
+  try
+    let m ← mkFreshExprMVar goal
+    let g := m.mvarId!
+    let solved ← g.withContext do
+      let t : Q(Prop) ← g.getType
+      if t.approxDepth.toNat > 64 then
+        return false
+      let shouldTry ← match t with
+        | ~q(@LE.le $α $_a $z $e) => pure (isSyntacticZero z)
+        | ~q(@LT.lt $α $_a $z $e) => pure (isSyntacticZero z)
+        | ~q(@Ne $α $e $z) => pure (isSyntacticZero z)
+        | ~q(@Ne $α $z $e) => pure (isSyntacticZero z)
+        | _ => pure false
+      if !shouldTry then
+        return false
+      let proof ← withOptions (fun opts => maxRecDepth.set opts 1000000) do
+        Mathlib.Meta.Positivity.solve t
+      g.assign proof
+      pure true
+    if solved && (← g.isAssigned) then
+      return some .positivity
+    return none
+  catch _ =>
+    return none
+  finally
+    saved.restore
+
 /--
 Try to prove `goal` using a controlled sequence:
 1) `assumptionCore` (catches direct hypotheses)
@@ -249,7 +283,11 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
     if (← g.withContext <| g.assumptionCore) then
       return some .assumption
 
-    -- 2) omega (when enabled) - can be slow, but necessary for Nat/Int guards
+    -- 2) positivity (fast for nonnegativity/nonzeroness goals over ordered structures)
+    if let some result ← tryPositivity? goal then
+      return some result
+
+    -- 3) omega (when enabled) - can be slow, but necessary for Nat/Int guards
     if useOmega then
       let g? ← g.withContext <| g.falseOrByContra
       match g? with
@@ -269,7 +307,7 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
           if ← gFalse.isAssigned then
             return some .omega
 
-    -- 3) grind (when enabled, last resort — SMT-style solver)
+    -- 4) grind (when enabled, last resort — SMT-style solver)
     if useGrind then
       -- Need a fresh mvar since the previous one may have been partially assigned
       let m' ← mkFreshExprMVar goal
@@ -390,7 +428,7 @@ def proveIntNonneg? (x : Expr) : MetaM (Option ProvedBy) := do
   try
     let zero : Expr := Lean.mkIntLit 0
     let goal ← Lean.Meta.mkLe zero x
-    tryProve? goal (useOmega := true)
+    tryProve? goal (useOmega := true) (useGrind := true)
   finally
     saved.restore
 
