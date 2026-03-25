@@ -137,7 +137,7 @@ def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
     | some zero =>
       let goal ← mkLE zero x
       -- omega won't help for Real; grind handles ordered-field reasoning
-      tryProve? goal (useOmega := false) (useGrind := true)
+      tryProve? goal (useOmega := false) (useGrind := true) (usePositivity := true)
 
 /-- Prove 0 < x -/
 def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
@@ -153,7 +153,7 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
     | some zero =>
       let goal ← mkLT zero x
       -- omega won't help for Real; grind handles ordered-field reasoning
-      tryProve? goal (useOmega := false) (useGrind := true)
+      tryProve? goal (useOmega := false) (useGrind := true) (usePositivity := true)
 
 /-- Prove x ≠ 0 -/
 def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
@@ -170,7 +170,7 @@ def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
     | none => return none
     | some zero =>
       let goal ← mkAppM ``Ne #[x, zero]
-      tryProve? goal (useOmega := true) (useGrind := true)
+      tryProve? goal (useOmega := true) (useGrind := true) (usePositivity := true)
 
 /-- Try to prove an unsafety condition for an analytic argument.
     Builds the appropriate goal based on the operation type:

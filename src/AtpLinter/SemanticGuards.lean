@@ -26,6 +26,7 @@ import Lean.Meta.Tactic.Simp.Main
 import Lean.Elab.Tactic.FalseOrByContra
 import Lean.Elab.Tactic.Omega
 import Lean.Meta.Tactic.Grind
+import Mathlib.Tactic.Positivity
 
 open Lean Meta
 
@@ -227,6 +228,17 @@ private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) : MetaM (Op
   catch _ => return none
   finally saved.restore
 
+/-- Try to close `mvarId` using Mathlib's `positivity` tactic.
+    Handles goals of the form `0 ≤ e`, `0 < e`, `e ≠ 0`.
+    Side-effect free (restores meta state). -/
+private def tryPositivity? (mvarId : MVarId) : MetaM (Option ProvedBy) := do
+  let saved ← Meta.saveState
+  try
+    Mathlib.Meta.Positivity.positivity mvarId
+    return some .positivity
+  catch _ => return none
+  finally saved.restore
+
 /--
 Try to prove `goal` using a controlled sequence:
 1) `assumptionCore` (catches direct hypotheses)
@@ -239,6 +251,7 @@ Note: simp is disabled for performance - the full Mathlib simp set is too slow.
 This function is side-effect free (restores meta state).
 -/
 def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
+    (usePositivity : Bool := false)
     : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
@@ -269,9 +282,16 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
           if ← gFalse.isAssigned then
             return some .omega
 
-    -- 3) grind (when enabled, last resort — SMT-style solver)
+    -- 3) positivity (when enabled) — handles 0 ≤ e, 0 < e, e ≠ 0
+    --    for expressions like x^2+1, √2, π, sums of squares, etc.
+    if usePositivity then
+      let m' ← mkFreshExprMVar goal
+      let g' := m'.mvarId!
+      if let some result ← tryPositivity? g' then
+        return some result
+
+    -- 4) grind (when enabled, last resort — SMT-style solver)
     if useGrind then
-      -- Need a fresh mvar since the previous one may have been partially assigned
       let m' ← mkFreshExprMVar goal
       let g' := m'.mvarId!
       if let some result ← tryGrind? g' grindConfigGuard then
@@ -343,7 +363,8 @@ linear facts like `2 ≤ d` or structural facts like `Nat.succ n`).
 
 Side-effect free.
 -/
-def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
+def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) (usePositivity : Bool := false)
+    : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
     let ty ← inferType d
@@ -356,13 +377,13 @@ def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option Prov
         -- omega can derive this from order facts (0 < d, d > 0, etc.)
         try
           let g1 ← Lean.Meta.mkAppM ``Ne #[d, zero]
-          if let some how ← tryProve? g1 omegaOk useGrind then return some how
+          if let some how ← tryProve? g1 omegaOk useGrind usePositivity then return some how
         catch _ => pure ()
 
         -- Also try 0 ≠ d (symmetric form)
         try
           let g2 ← Lean.Meta.mkAppM ``Ne #[zero, d]
-          if let some how ← tryProve? g2 omegaOk useGrind then return some how
+          if let some how ← tryProve? g2 omegaOk useGrind usePositivity then return some how
         catch _ => pure ()
 
         -- For non-Nat/Int types (Real, Complex, etc.), check positivity hypotheses
@@ -375,12 +396,13 @@ def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option Prov
   finally
     saved.restore
 
-/-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega, optionally grind.) -/
-def proveNatSubGuard? (a b : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
+/-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega, optionally grind/positivity.) -/
+def proveNatSubGuard? (a b : Expr) (useGrind : Bool := false) (usePositivity : Bool := false)
+    : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
     let goal ← Lean.Meta.mkLe b a
-    tryProve? goal (useOmega := true) (useGrind := useGrind)
+    tryProve? goal (useOmega := true) (useGrind := useGrind) (usePositivity := usePositivity)
   finally
     saved.restore
 
