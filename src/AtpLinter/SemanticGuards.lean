@@ -27,7 +27,8 @@ import Lean.Elab.Tactic.FalseOrByContra
 import Lean.Elab.Tactic.Omega
 import Lean.Meta.Tactic.Grind
 import AtpLinter.Basic
-import Mathlib.Tactic.Positivity.Core
+import Mathlib.Tactic.Positivity
+import Mathlib.Data.Real.Sqrt
 
 open Lean Meta
 open Qq

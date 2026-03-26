@@ -83,7 +83,7 @@ context (all hypotheses from the declaration signature), so guard checking sees
 all available hypotheses regardless of binder order. For nested binders
 encountered during recursion, the context is extended naturally.
 -/
-partial def findDivisions (e : Expr) (lctx : LocalContext) : MetaM (Array DivInfo) := do
+partial def findDivisions (e : Expr) (lctx : LocalContext) (positive : Bool := true) : MetaM (Array DivInfo) := do
   let mut results := #[]
   let localInsts ← getLocalInstances
 
@@ -250,49 +250,75 @@ partial def findDivisions (e : Expr) (lctx : LocalContext) : MetaM (Array DivInf
       exprHash := e.hash
     }
 
-  -- Recurse into sub-expressions, extending context for nested binders
+  -- Recurse into sub-expressions, extending context for nested binders.
+  -- `positive` tracks logical polarity: true = asserted, false = negated/hypothesis.
+  -- The conjunction rule only fires in positive position.
   match e with
   | .app f a =>
-      for r in (← findDivisions f lctx) do
-        results := results.push r
-      for r in (← findDivisions a lctx) do
-        results := results.push r
+      if positive && e.isAppOfArity ``And 2 then
+        -- Conjunction in positive position: share sibling conjuncts as hypotheses
+        let lhs := e.getAppArgs[0]!
+        let rhs := e.getAppArgs[1]!
+
+        let lhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd rhs fun _ => do
+            let lctx' ← getLCtx
+            findDivisions lhs lctx' positive
+        for r in lhsResults do
+          results := results.push r
+
+        let rhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd lhs fun _ => do
+            let lctx' ← getLCtx
+            findDivisions rhs lctx' positive
+        for r in rhsResults do
+          results := results.push r
+      else if f.isConstOf ``Not then
+        -- Negation: flip polarity for the argument
+        for r in (← findDivisions a lctx (!positive)) do
+          results := results.push r
+      else
+        for r in (← findDivisions f lctx positive) do
+          results := results.push r
+        for r in (← findDivisions a lctx positive) do
+          results := results.push r
 
   | .lam n ty body bi =>
-      for r in (← findDivisions ty lctx) do
+      for r in (← findDivisions ty lctx positive) do
         results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findDivisions (body.instantiate1 fvar) lctx'
+        findDivisions (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .forallE n ty body bi =>
-      for r in (← findDivisions ty lctx) do
+      -- Type (hypothesis) is in flipped polarity; body (conclusion) keeps same
+      for r in (← findDivisions ty lctx (!positive)) do
         results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findDivisions (body.instantiate1 fvar) lctx'
+        findDivisions (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .letE name type value body _ =>
-      for r in (← findDivisions type lctx) do
+      for r in (← findDivisions type lctx positive) do
         results := results.push r
-      for r in (← findDivisions value lctx) do
+      for r in (← findDivisions value lctx positive) do
         results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
-        findDivisions (body.instantiate1 fvar) lctx'
+        findDivisions (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .mdata _ inner =>
-      for r in (← findDivisions inner lctx) do
+      for r in (← findDivisions inner lctx positive) do
         results := results.push r
 
   | .proj _ _ inner =>
-      for r in (← findDivisions inner lctx) do
+      for r in (← findDivisions inner lctx positive) do
         results := results.push r
 
   | _ => pure ()

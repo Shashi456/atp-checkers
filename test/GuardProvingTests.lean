@@ -6,6 +6,7 @@
 -/
 
 import AtpLinter
+import Mathlib.Data.Set.Basic
 set_option linter.unusedVariables false
 
 namespace GuardProving
@@ -284,5 +285,73 @@ theorem chainedIneq (a b c : Nat) (h1 : a ≥ c) (h2 : c ≥ b) : a - b ≤ a :=
 info: ✓ GuardProving.chainedIneq: No issues detected
 -/
 #guard_msgs in #check_atp chainedIneq
+
+-- ── Conjunction-aware guard mining ──────────────────────────────
+
+/-- Existential with guard in sibling conjunct: ∃ q, 0 < q ∧ ... 1/q ... -/
+def existsPositiveDenominator (α : ℝ) (n : Nat) : Prop :=
+  ∃ q : ℝ, 0 < q ∧ |α - 1 / q| < 1 / (((n : ℝ) + 1) * q)
+
+/-- info: ✓ GuardProving.existsPositiveDenominator: No issues detected -/
+#guard_msgs in #check_atp existsPositiveDenominator
+
+/-- Set predicate with guard in sibling conjunct: { q | q ≠ 0 ∧ ... 1/q ... } -/
+def dirichletSetLike (α : ℝ) (n : Nat) : Set ℝ :=
+  { q : ℝ | q ≠ 0 ∧ |α - 1 / q| < 1 / (((n : ℝ) + 1) * q) }
+
+/-- info: ✓ GuardProving.dirichletSetLike: No issues detected -/
+#guard_msgs in #check_atp dirichletSetLike
+
+-- ── Positive-position conjunction: direct ─────────────────────
+
+/-- Direct positive conjunction: x ≠ 0 guards 1/x in sibling -/
+def positiveConjDiv (x : ℝ) : Prop :=
+  x ≠ 0 ∧ 1 / x = x
+
+/-- info: ✓ GuardProving.positiveConjDiv: No issues detected -/
+#guard_msgs in #check_atp positiveConjDiv
+
+/-- Direct positive conjunction: x ≠ 0 guards x⁻¹ in sibling -/
+def positiveConjInv (x : Rat) : Prop :=
+  x ≠ 0 ∧ x⁻¹ = x
+
+/-- info: ✓ GuardProving.positiveConjInv: No issues detected -/
+#guard_msgs in #check_atp positiveConjInv
+
+-- ── Negative-position conjunction: warnings should fire ───────
+
+/-- Negated conjunction: x ≠ 0 is NOT assumed, division warning should fire -/
+def negatedConjunctionDiv (x : ℝ) : Prop :=
+  ¬ (x ≠ 0 ∧ 1 / x = x)
+
+/--
+info: Analysis of GuardProving.negatedConjunctionDiv:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.negatedConjunctionDiv: Potential Division by Zero
+  1 / x has no guard ensuring x ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : x ≠ 0` or `h : x > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp negatedConjunctionDiv
+
+/-- Implication antecedent: conjunction is hypothesis, not asserted -/
+def antecedentConjunctionDiv (x : ℝ) : Prop :=
+  (x ≠ 0 ∧ 1 / x = x) → True
+
+/--
+info: Analysis of GuardProving.antecedentConjunctionDiv:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.antecedentConjunctionDiv: Potential Division by Zero
+  1 / x has no guard ensuring x ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : x ≠ 0` or `h : x > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp antecedentConjunctionDiv
 
 end GuardProving

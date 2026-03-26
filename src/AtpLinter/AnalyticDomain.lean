@@ -71,6 +71,11 @@ def isObviouslyNonNeg (e : Expr) : MetaM Bool := do
 
   let e ← whnf e
 
+  -- Known positive constants are certainly non-negative.
+  if let .const name _ := e then
+    let nameStr := name.toString
+    if nameStr == "Real.pi" || nameStr == "π" then return true
+
   -- x^2 pattern (even power)
   if e.isAppOfArity ``HPow.hPow 6 then
     let exp := e.getAppArgs[5]!
@@ -91,6 +96,8 @@ def isObviouslyNonNeg (e : Expr) : MetaM Bool := do
   let fn := e.getAppFn
   if let .const name _ := fn then
     let nameStr := name.toString
+    if nameStr == "Real.sqrt" || nameStr == "NNReal.sqrt" then return true
+    if containsSubstr nameStr "exp" then return true
     if containsSubstr nameStr "abs" then return true
     if containsSubstr nameStr "norm" then return true
     if containsSubstr nameStr "nnnorm" then return true
@@ -222,7 +229,7 @@ def isLogName (name : Name) : Bool :=
 
 /-- Find analytic domain issues in an expression -/
 partial def findAnalyticPatterns (e : Expr) (lctx : LocalContext) (insts : LocalInstances)
-    : MetaM (Array AnalyticInfo) := do
+    (positive : Bool := true) : MetaM (Array AnalyticInfo) := do
   let mut results := #[]
 
   -- Performance: Skip non-application expressions quickly
@@ -291,52 +298,80 @@ partial def findAnalyticPatterns (e : Expr) (lctx : LocalContext) (insts : Local
         }
     | none => pure ()  -- Type has no Zero, Inv.inv may have different semantics
 
-  -- Recurse into subexpressions with proper context handling
+  -- Recurse into subexpressions with proper context handling.
+  -- `positive` tracks logical polarity: true = asserted, false = negated/hypothesis.
+  -- The conjunction rule only fires in positive position.
   match e with
   | .forallE n ty body bi =>
-    for r in (← findAnalyticPatterns ty lctx insts) do
+    -- Type (hypothesis) is in flipped polarity; body (conclusion) keeps same
+    for r in (← findAnalyticPatterns ty lctx insts (!positive)) do
       results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let lctx' ← getLCtx
       let insts' ← getLocalInstances
-      findAnalyticPatterns (body.instantiate1 fvar) lctx' insts'
+      findAnalyticPatterns (body.instantiate1 fvar) lctx' insts' positive
     for r in bodyResults do
       results := results.push r
 
   | .lam n ty body bi =>
-    for r in (← findAnalyticPatterns ty lctx insts) do
+    for r in (← findAnalyticPatterns ty lctx insts positive) do
       results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let lctx' ← getLCtx
       let insts' ← getLocalInstances
-      findAnalyticPatterns (body.instantiate1 fvar) lctx' insts'
+      findAnalyticPatterns (body.instantiate1 fvar) lctx' insts' positive
     for r in bodyResults do
       results := results.push r
 
   | .letE n ty val body _ =>
-    for r in (← findAnalyticPatterns ty lctx insts) do
+    for r in (← findAnalyticPatterns ty lctx insts positive) do
       results := results.push r
-    for r in (← findAnalyticPatterns val lctx insts) do
+    for r in (← findAnalyticPatterns val lctx insts positive) do
       results := results.push r
     let bodyResults ← withLetDecl n ty val fun fvar => do
       let lctx' ← getLCtx
       let insts' ← getLocalInstances
-      findAnalyticPatterns (body.instantiate1 fvar) lctx' insts'
+      findAnalyticPatterns (body.instantiate1 fvar) lctx' insts' positive
     for r in bodyResults do
       results := results.push r
 
   | .app f a =>
-    for r in (← findAnalyticPatterns f lctx insts) do
-      results := results.push r
-    for r in (← findAnalyticPatterns a lctx insts) do
-      results := results.push r
+    if positive && e.isAppOfArity ``And 2 then
+      -- Conjunction in positive position: share sibling conjuncts as hypotheses
+      let lhs := e.getAppArgs[0]!
+      let rhs := e.getAppArgs[1]!
+
+      let lhsResults ← withLCtx lctx insts do
+        withLocalDeclD `_atpAnd rhs fun _ => do
+          let lctx' ← getLCtx
+          let insts' ← getLocalInstances
+          findAnalyticPatterns lhs lctx' insts' positive
+      for r in lhsResults do
+        results := results.push r
+
+      let rhsResults ← withLCtx lctx insts do
+        withLocalDeclD `_atpAnd lhs fun _ => do
+          let lctx' ← getLCtx
+          let insts' ← getLocalInstances
+          findAnalyticPatterns rhs lctx' insts' positive
+      for r in rhsResults do
+        results := results.push r
+    else if f.isConstOf ``Not then
+      -- Negation: flip polarity for the argument
+      for r in (← findAnalyticPatterns a lctx insts (!positive)) do
+        results := results.push r
+    else
+      for r in (← findAnalyticPatterns f lctx insts positive) do
+        results := results.push r
+      for r in (← findAnalyticPatterns a lctx insts positive) do
+        results := results.push r
 
   | .mdata _ inner =>
-    for r in (← findAnalyticPatterns inner lctx insts) do
+    for r in (← findAnalyticPatterns inner lctx insts positive) do
       results := results.push r
 
   | .proj _ _ inner =>
-    for r in (← findAnalyticPatterns inner lctx insts) do
+    for r in (← findAnalyticPatterns inner lctx insts positive) do
       results := results.push r
 
   | _ => pure ()

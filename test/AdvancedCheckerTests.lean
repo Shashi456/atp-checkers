@@ -8,6 +8,9 @@
 
 import AtpLinter
 import TestAssertions
+import Mathlib.Analysis.SpecialFunctions.Log.Basic
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
+import Mathlib.Data.Real.Sqrt
 set_option linter.unusedVariables false
 
 namespace AdvancedChecker
@@ -365,17 +368,7 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 -- Theorem with inverse that's guarded by hypothesis
 theorem inv_guarded_hyp (x : Rat) (hx : x ≠ 0) : (x⁻¹)⁻¹ = x := by
   sorry
-/--
-info: Analysis of AdvancedChecker.inv_guarded_hyp:
-──────────────────────────────────────────────────
-[WARNING] AdvancedChecker.inv_guarded_hyp: Analytic Domain Totalization
-  ⁻¹(x⁻¹): x⁻¹ requires x ≠ 0 (returns 0 for zero input)
-  Taxonomy: I.d - Lean Semantic Traps
-  Suggestion: Add guard hypothesis: x⁻¹ ≠ 0
-
-──────────────────────────────────────────────────
-Summary: 0 error(s), 1 warning(s), 0 info(s)
--/
+/-- info: ✓ AdvancedChecker.inv_guarded_hyp: No issues detected -/
 #guard_msgs in #check_atp inv_guarded_hyp
 
 -- ============================================================
@@ -563,5 +556,61 @@ Summary: 0 error(s), 2 warning(s), 0 info(s)
 #guard_msgs in #check_atp castAfterDiv
 
 end ReviewPatterns
+
+-- ── Benchmark-shaped safe discharge tests ──────────────────────
+
+namespace BenchmarkShape
+
+noncomputable def logSquarePlusOne (x : ℝ) : ℝ :=
+  Real.log (x ^ 2 + 1)
+
+/-- info: ✓ AdvancedChecker.BenchmarkShape.logSquarePlusOne: No issues detected -/
+#guard_msgs in #check_atp logSquarePlusOne
+
+noncomputable def sqrtPositivePolynomial (x : ℝ) : ℝ :=
+  Real.sqrt (5 * x ^ 2 + 35)
+
+/-- info: ✓ AdvancedChecker.BenchmarkShape.sqrtPositivePolynomial: No issues detected -/
+#guard_msgs in #check_atp sqrtPositivePolynomial
+
+noncomputable def reciprocalOfPositiveSqrt (x : ℝ) : ℝ :=
+  (x + 1) / Real.sqrt (5 * x ^ 2 + 35)
+
+/-- info: ✓ AdvancedChecker.BenchmarkShape.reciprocalOfPositiveSqrt: No issues detected -/
+#guard_msgs in #check_atp reciprocalOfPositiveSqrt
+
+noncomputable def unrestrictedSecant (x : ℝ) : ℝ :=
+  (1 / Real.cos x) ^ 2
+
+/--
+info: Analysis of AdvancedChecker.BenchmarkShape.unrestrictedSecant:
+──────────────────────────────────────────────────
+[WARNING] AdvancedChecker.BenchmarkShape.unrestrictedSecant: Potential Division by Zero
+  1 / Real.cos x has no guard ensuring Real.cos x ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : Real.cos x ≠ 0` or `h : Real.cos x > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp unrestrictedSecant
+
+noncomputable def boundedReciprocal (f : ℝ → ℝ) (h : ∀ z, 1 ≤ |f z|) : ℝ → ℝ :=
+  fun z => 1 / f z
+
+/--
+info: Analysis of AdvancedChecker.BenchmarkShape.boundedReciprocal:
+──────────────────────────────────────────────────
+[WARNING] AdvancedChecker.BenchmarkShape.boundedReciprocal: Potential Division by Zero
+  1 / f z has no guard ensuring f z ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : f z ≠ 0` or `h : f z > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp boundedReciprocal
+
+end BenchmarkShape
 
 end AdvancedChecker
