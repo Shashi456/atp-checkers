@@ -9,6 +9,12 @@ it attempts to prove (via `assumption` → `omega` → `grind`) that safety guar
 exist or that dangerous conditions hold, producing machine-verifiable confidence
 levels on every finding.
 
+Guard mining is polarity-aware. For example, in `x ≠ 0 ∧ 1 / x = x`, the left
+conjunct safely guards the right. But in `¬ (x ≠ 0 ∧ 1 / x = x)` or
+`(x ≠ 0 ∧ 1 / x = x) → True`, that same conjunct is not treated as an active
+guard, so the division warning still fires. This avoids an earlier soundness
+bug where conjunction mining in negative position could suppress real warnings.
+
 ## Quick Start
 
 ```bash

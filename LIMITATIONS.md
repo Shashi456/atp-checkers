@@ -21,6 +21,7 @@ The semantic guard prover (`assumption` → `omega` → `grind`) reasons only fr
 In practice, this means:
 - It can use local hypotheses already present in the declaration.
 - All guard-checking checkers open the full binder telescope first (`forallTelescope`/`lambdaTelescope`), so every hypothesis in the declaration signature is simultaneously available regardless of binder order.
+- Some checkers also mine sibling facts from positive conjunctions and set-style predicates, but this is polarity-aware: facts are shared only when the conjunction is asserted, not when it appears under negation or in an implication antecedent.
 - It does not inline helper definitions or lemmas, follow facts across declarations or modules, or recover arbitrary semantic facts established indirectly.
 
 If a divisor `b` is known to be non-zero only through a helper lemma proved elsewhere, the linter may still flag `a / b` as unguarded.

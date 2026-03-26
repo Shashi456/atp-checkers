@@ -80,6 +80,26 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp divGuardedOmega
 
+/-- Casted Nat positivity should guard real division. -/
+noncomputable def divGuardedNatCast (x : ℝ) (n : Nat) (h : 0 < n) : ℝ := x / (n : ℝ)
+/-- info: ✓ GuardProving.divGuardedNatCast: No issues detected -/
+#guard_msgs in #check_atp divGuardedNatCast
+
+/-- Conjunctive positivity hypothesis should guard product denominator. -/
+noncomputable def divGuardedProductConj (x y z : ℝ) (h : 0 < y ∧ 0 < z) : ℝ := x / (y * z)
+/-- info: ✓ GuardProving.divGuardedProductConj: No issues detected -/
+#guard_msgs in #check_atp divGuardedProductConj
+
+/-- Positivity should propagate through powers for division guards. -/
+noncomputable def divGuardedSquare (x y : ℝ) (h : 0 < y) : ℝ := x / (y ^ 2)
+/-- info: ✓ GuardProving.divGuardedSquare: No issues detected -/
+#guard_msgs in #check_atp divGuardedSquare
+
+/-- Structured positivity should discharge square-plus-one denominators. -/
+noncomputable def divGuardedSquarePlusOne (x y : ℝ) : ℝ := x / (y ^ 2 + 1)
+/-- info: ✓ GuardProving.divGuardedSquarePlusOne: No issues detected -/
+#guard_msgs in #check_atp divGuardedSquarePlusOne
+
 -- ============================================================
 -- Nat Subtraction Guard Proving
 -- ============================================================
@@ -353,5 +373,39 @@ info: Analysis of GuardProving.antecedentConjunctionDiv:
 Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp antecedentConjunctionDiv
+
+/-- Negated conjunction (analytic): x ≠ 0 is NOT assumed, inverse warning should fire -/
+def negatedConjunctionInv (x : Rat) : Prop :=
+  ¬ (x ≠ 0 ∧ x⁻¹ = x)
+
+/--
+info: Analysis of GuardProving.negatedConjunctionInv:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.negatedConjunctionInv: Analytic Domain Totalization
+  ⁻¹(x): x⁻¹ requires x ≠ 0 (returns 0 for zero input)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add guard hypothesis: x ≠ 0
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp negatedConjunctionInv
+
+/-- Implication antecedent (analytic): conjunction is hypothesis, not asserted -/
+def antecedentConjunctionInv (x : Rat) : Prop :=
+  (x ≠ 0 ∧ x⁻¹ = x) → True
+
+/--
+info: Analysis of GuardProving.antecedentConjunctionInv:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.antecedentConjunctionInv: Analytic Domain Totalization
+  ⁻¹(x): x⁻¹ requires x ≠ 0 (returns 0 for zero input)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add guard hypothesis: x ≠ 0
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp antecedentConjunctionInv
 
 end GuardProving

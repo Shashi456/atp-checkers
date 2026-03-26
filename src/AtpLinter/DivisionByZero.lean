@@ -16,6 +16,12 @@
     from the declaration signature are available for guard proving, regardless
     of binder ordering. This matches the proof-state semantics where all
     hypotheses are simultaneously available.
+  - Conjunction-aware guard mining is polarity-aware. Sibling conjuncts are
+    shared only in positive/asserted position (e.g. `x ≠ 0 ∧ 1 / x = x`). They
+    are NOT shared through negation or implication antecedents (e.g.
+    `¬ (x ≠ 0 ∧ 1 / x = x)` or `(x ≠ 0 ∧ 1 / x = x) → True`), because those
+    contexts do not assert the guard. This fixes an earlier soundness bug where
+    naive conjunction mining could hide real division warnings.
   - Guard checking is proof-based: divisor must be provably ≠ 0, not just
     syntactically a non-zero literal (which can be unsound for Fin, ZMod, etc.)
 -/
