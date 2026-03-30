@@ -6,6 +6,7 @@
 -/
 
 import Lean
+import Mathlib.Algebra.CharZero.Defs
 
 open Lean Meta
 
@@ -171,17 +172,63 @@ def isSyntacticNonZeroLiteral (e : Expr) : Bool :=
   | _ => false
 
 /-- Check if a type is "safe" for syntactic non-zero optimization.
-    Safe types are those where numeric literals mean what they say (ℕ, ℤ, ℚ, ℝ, ℂ).
-    Unsafe types include Fin n, ZMod n where (n : Fin n) = 0. -/
-def isSafeTypeForNonZeroLiteral (ty : Expr) : Bool :=
-  match ty with
-  | .const ``Nat _ => true
-  | .const ``Int _ => true
-  | .const ``Rat _ => true
-  | .const name _ =>
-    let s := name.toString
-    s == "Real" || s == "Complex" || containsSubstr s "Real" || containsSubstr s "Rat"
-  | _ => false
+    Safe types are those where numeric literals mean what they say —
+    i.e. no nonzero natural number coerces to zero. This is exactly
+    the CharZero typeclass. Covers ℕ, ℤ, ℚ, ℝ, ℂ and any other
+    CharZero type. Unsafe types (Fin n, ZMod n) will not have the
+    instance and correctly return false.
+    Falls back to Nat/Int name matching if instance synthesis fails
+    (e.g. due to missing imports). -/
+def isSafeTypeForNonZeroLiteral (ty : Expr) : MetaM Bool := do
+  -- Fast path for Nat/Int (always safe, no instance needed)
+  if ty.isConstOf ``Nat || ty.isConstOf ``Int then return true
+  -- Principled check: does the type have CharZero?
+  try
+    let _ ← Meta.synthInstance (← Meta.mkAppM ``CharZero #[ty])
+    return true
+  catch _ =>
+    return false
+
+/-- Build a local context for analyzing binder j's type using "prop-full,
+    data-prefix" semantics:
+    - Keep all earlier binders (0..j-1)
+    - Drop the current binder j
+    - Drop all later NON-propositional binders (data evidence like Fin, Subtype
+      values whose derived facts could circularly justify the type)
+    - Keep later propositional binders UNLESS they depend on a dropped binder
+      (prevents circular props like `h : x.1 < n - k` where x was dropped)
+
+    This prevents:
+    - Self-justification: `i : Fin (n - k)` using its own Fin.isLt
+    - Same-type siblings: `(x y : Fin (n - k))` — y is data, dropped
+    - Mixed-type witnesses: `(x : Fin (n-k)) (y : {m // m < n-k})` — y is data
+    - Dependent circular props: `(x : Fin (n-k)) (h : x.1 < n-k)` — h depends on x
+
+    While preserving:
+    - Legitimate later guards: `(x : Fin (a/b)) (hb : b ≠ 0)` — hb is prop,
+      independent of x -/
+def mkSafeLCtxForType (fullLCtx : LocalContext) (fvars : Array Expr) (j : Nat) : MetaM LocalContext := do
+  let mut lctx := fullLCtx
+  -- Track which fvars are dropped so we can check dependency
+  let mut dropped : Array FVarId := #[fvars[j]!.fvarId!]
+  -- Always drop the current binder
+  lctx := lctx.erase fvars[j]!.fvarId!
+  -- Process later binders
+  for k in [j + 1 : fvars.size] do
+    let fvar := fvars[k]!
+    let fid := fvar.fvarId!
+    let ty ← Meta.inferType fvar
+    if ← Meta.isProp ty then
+      -- Propositional binder: keep UNLESS it depends on a dropped binder
+      let dependsOnDropped := dropped.any fun did => ty.containsFVar did
+      if dependsOnDropped then
+        lctx := lctx.erase fid
+        dropped := dropped.push fid
+    else
+      -- Data binder: always drop (could produce circular derived facts)
+      lctx := lctx.erase fid
+      dropped := dropped.push fid
+  return lctx
 
 /-- Pretty print an expression for reporting, with fallback for bound variables -/
 def ppExprSimple (e : Expr) : MetaM String := do

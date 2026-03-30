@@ -11,9 +11,10 @@
   without checking that the Int is non-negative.
 
   SOUNDNESS NOTES:
-  - Uses full-scope traversal: when analyzing a binder type, ALL hypotheses
-    from the declaration signature are available for guard proving, regardless
-    of binder ordering. This matches the proof-state semantics where all
+  - Uses prop-full, data-prefix binder-type analysis: when analyzing a
+    binder type, all propositional hypotheses are available regardless of
+    binder ordering, but later data binders are excluded to prevent
+    circular derived-fact justification (see mkSafeLCtxForType).
     hypotheses are simultaneously available.
   - Int.natAbs is reported separately (not as "guarded") since it has
     different semantics (absolute value, not truncation)
@@ -26,7 +27,7 @@ import AtpLinter.Basic
 import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
-open AtpLinter (ppExprSimple)
+open AtpLinter (ppExprSimple mkSafeLCtxForType)
 open AtpLinter.SemanticGuards
 
 namespace AtpLinter.IntToNat
@@ -83,8 +84,12 @@ When called from `analyzeDecl`, the `lctx` parameter contains the FULL local
 context (all hypotheses from the declaration signature), so guard checking sees
 all available hypotheses regardless of binder order. For nested binders
 encountered during recursion, the context is extended naturally.
+
+Positive-position conjunctions share sibling facts as local hypotheses. This is
+polarity-aware: conjunctions under negation or in implication antecedents do not
+share guards.
 -/
-partial def findIntToNat (e : Expr) (lctx : LocalContext) : MetaM (Array ToNatInfo) := do
+partial def findIntToNat (e : Expr) (lctx : LocalContext) (positive : Bool := true) : MetaM (Array ToNatInfo) := do
   let mut results := #[]
   let localInsts ← getLocalInstances
 
@@ -127,50 +132,57 @@ partial def findIntToNat (e : Expr) (lctx : LocalContext) : MetaM (Array ToNatIn
       exprHash := e.hash
     }
 
-  -- Recurse into sub-expressions, extending context for nested binders
+  -- Recurse into sub-expressions, extending context for nested binders.
+  -- `positive` tracks logical polarity for conjunction sharing.
+  let localInsts ← getLocalInstances
   match e with
   | .app f a =>
-      for r in (← findIntToNat f lctx) do
-        results := results.push r
-      for r in (← findIntToNat a lctx) do
-        results := results.push r
+      if positive && e.isAppOfArity ``And 2 then
+        let lhs := e.getAppArgs[0]!
+        let rhs := e.getAppArgs[1]!
+        let lhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd rhs fun _ => do
+            let lctx' ← getLCtx
+            findIntToNat lhs lctx' positive
+        for r in lhsResults do results := results.push r
+        let rhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd lhs fun _ => do
+            let lctx' ← getLCtx
+            findIntToNat rhs lctx' positive
+        for r in rhsResults do results := results.push r
+      else if f.isConstOf ``Not then
+        for r in (← findIntToNat a lctx (!positive)) do results := results.push r
+      else
+        for r in (← findIntToNat f lctx positive) do results := results.push r
+        for r in (← findIntToNat a lctx positive) do results := results.push r
 
   | .lam n ty body bi =>
-      for r in (← findIntToNat ty lctx) do
-        results := results.push r
+      for r in (← findIntToNat ty lctx positive) do results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findIntToNat (body.instantiate1 fvar) lctx'
-      for r in bodyResults do
-        results := results.push r
+        findIntToNat (body.instantiate1 fvar) lctx' positive
+      for r in bodyResults do results := results.push r
 
   | .forallE n ty body bi =>
-      for r in (← findIntToNat ty lctx) do
-        results := results.push r
+      for r in (← findIntToNat ty lctx (!positive)) do results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findIntToNat (body.instantiate1 fvar) lctx'
-      for r in bodyResults do
-        results := results.push r
+        findIntToNat (body.instantiate1 fvar) lctx' positive
+      for r in bodyResults do results := results.push r
 
   | .letE name type value body _ =>
-      for r in (← findIntToNat type lctx) do
-        results := results.push r
-      for r in (← findIntToNat value lctx) do
-        results := results.push r
+      for r in (← findIntToNat type lctx positive) do results := results.push r
+      for r in (← findIntToNat value lctx positive) do results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
-        findIntToNat (body.instantiate1 fvar) lctx'
-      for r in bodyResults do
-        results := results.push r
+        findIntToNat (body.instantiate1 fvar) lctx' positive
+      for r in bodyResults do results := results.push r
 
   | .mdata _ inner =>
-      for r in (← findIntToNat inner lctx) do
-        results := results.push r
+      for r in (← findIntToNat inner lctx positive) do results := results.push r
 
   | .proj _ _ inner =>
-      for r in (← findIntToNat inner lctx) do
-        results := results.push r
+      for r in (← findIntToNat inner lctx positive) do results := results.push r
 
   | _ => pure ()
 
@@ -212,14 +224,16 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let mut allConvs := #[]
 
   -- Analyze the type: open ALL binders first so every hypothesis is available
-  -- for guard checking, regardless of binder order (full proof-state semantics).
+  -- for guard checking. Binder-type analysis uses prop-full, data-prefix
   let typeConvs ← withLCtx emptyLCtx #[] do
     forallTelescope type fun fvars body => do
       let fullLCtx ← getLCtx
       let mut convs := #[]
-      for fvar in fvars do
+      for j in [:fvars.size] do
+        let fvar := fvars[j]!
         let ldecl ← fvar.fvarId!.getDecl
-        for r in (← findIntToNat ldecl.type fullLCtx) do
+        let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+        for r in (← findIntToNat ldecl.type lctxForType) do
           convs := convs.push r
       for r in (← findIntToNat body fullLCtx) do
         convs := convs.push r
@@ -236,9 +250,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
         lambdaTelescope value fun fvars body => do
           let fullLCtx ← getLCtx
           let mut convs := #[]
-          for fvar in fvars do
+          for j in [:fvars.size] do
+            let fvar := fvars[j]!
             let ldecl ← fvar.fvarId!.getDecl
-            for r in (← findIntToNat ldecl.type fullLCtx) do
+            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+            for r in (← findIntToNat ldecl.type lctxForType) do
               convs := convs.push r
           for r in (← findIntToNat body fullLCtx) do
             convs := convs.push r

@@ -446,7 +446,8 @@ def subByZero (a : Nat) : Nat := a - 0
 /-- info: ✓ PrefixScope.subByZero: No issues detected -/
 #guard_msgs in #check_atp subByZero
 
--- Subtraction in a later binder type (unguarded)
+-- Subtraction in a later binder type (unguarded — Fin.isLt from the binder
+-- itself must NOT circularly justify its own type parameter)
 def finSubTypeUnguarded (n k : Nat) : Fin (n - k) → Nat :=
   fun _ => 0
 /--

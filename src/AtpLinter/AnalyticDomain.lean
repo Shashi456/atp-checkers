@@ -130,14 +130,15 @@ def isObviouslyPos (e : Expr) : MetaM Bool := do
 
   return false
 
-/-- Prove 0 ≤ x -/
+/-- Prove 0 ≤ x. Enriches local context with derived facts and expanded
+    conjunctions before proving, matching proveDivisorSafe?. -/
 def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
   -- First check obvious cases
   if ← isObviouslyNonNeg x then
     return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
-  withSnapshot snap do
+  withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
     let ty ← inferType x
     match ← mkZeroOf ty with
     | none => return none
@@ -146,14 +147,15 @@ def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
       -- omega won't help for Real; grind handles ordered-field reasoning
       tryProve? goal (useOmega := false) (useGrind := true)
 
-/-- Prove 0 < x -/
+/-- Prove 0 < x. Enriches local context with derived facts and expanded
+    conjunctions before proving, matching proveDivisorSafe?. -/
 def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
   -- First check obvious cases
   if ← isObviouslyPos x then
     return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
-  withSnapshot snap do
+  withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
     let ty ← inferType x
     match ← mkZeroOf ty with
     | none => return none
@@ -162,22 +164,56 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
       -- omega won't help for Real; grind handles ordered-field reasoning
       tryProve? goal (useOmega := false) (useGrind := true)
 
-/-- Prove x ≠ 0 -/
+/-- Prove x ≠ 0. Enriches local context with derived facts and expanded
+    conjunctions, and tries structural nonzero closure (mul_ne_zero,
+    pow_ne_zero) before falling back to general provers. -/
 def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
   -- Shortcut: syntactic positive literals on safe types are obviously non-zero
   if isSyntacticNonZeroLiteral x then
     let ty ← inferType x
-    if isSafeTypeForNonZeroLiteral ty then
+    if ← isSafeTypeForNonZeroLiteral ty then
       return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
-  withSnapshot snap do
+  withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
     let ty ← inferType x
     match ← mkZeroOf ty with
     | none => return none
     | some zero =>
+      -- Try direct proof first
       let goal ← mkAppM ``Ne #[x, zero]
-      tryProve? goal (useOmega := true) (useGrind := true)
+      if let some how ← tryProve? goal (useOmega := true) (useGrind := true) then
+        return some how
+      -- Try structural nonzero closure (mul_ne_zero, pow_ne_zero)
+      if let some (_, how) ← proveStructuralNonzero? x (useGrind := true) then
+        return some how
+      -- Cast transport: unwrap Nat.cast/Int.cast/Rat.cast, prove nonzero on source
+      if let some (_, how) ← proveCastTransport? x (useGrind := true) then
+        return some how
+      -- Try positivity: 0 < x → x ≠ 0
+      try
+        let gPos ← Lean.Meta.mkLt zero x
+        if let some _ ← tryProve? gPos (useOmega := false) (useGrind := true) then
+          return some .positivity
+      catch _ => pure ()
+      return none
+
+/-- Check whether `x ≠ 0` is a sound inverse guard for this type.
+    For scalar-like types (fields, division rings, GroupWithZero), `x ≠ 0`
+    correctly guards `x⁻¹`. For types where `Inv` has different semantics
+    (e.g. matrix inverse needs `IsUnit`, group inverse is total), we skip
+    the nonzero check to avoid false positives.
+    We test: does the type have a `GroupWithZero` instance? If so, `x ≠ 0`
+    is the right guard. If not, the inverse may have non-scalar semantics. -/
+def supportsNeZeroInvGuard (ty : Expr) : MetaM Bool := do
+  -- If the type has GroupWithZero, then x ≠ 0 ↔ IsUnit x, so nonzero is correct.
+  -- This covers fields, division rings, and ℝ/ℂ/ℚ.
+  try
+    let _ ← synthInstance (← mkAppM ``GroupWithZero #[ty])
+    return true
+  catch _ =>
+    -- No GroupWithZero — inv has different semantics (matrix, group, etc.)
+    return false
 
 /-- Try to prove an unsafety condition for an analytic argument.
     Builds the appropriate goal based on the operation type:
@@ -281,9 +317,8 @@ partial def findAnalyticPatterns (e : Expr) (lctx : LocalContext) (insts : Local
   if e.isAppOfArity ``Inv.inv 3 then
     let arg := e.getAppArgs[2]!
     let argTy ← inferType arg
-    -- Gate: only check if the type has a Zero instance (mkZeroOf succeeds)
-    match ← mkZeroOf argTy with
-    | some _ =>
+    -- Gate: only check types where nonzero really is the correct inverse guard.
+    if ← supportsNeZeroInvGuard argTy then
       let guard ← proveNeZero? arg lctx insts
       if guard.isNone then
         let argStr ← ppExprSimple arg
@@ -296,7 +331,8 @@ partial def findAnalyticPatterns (e : Expr) (lctx : LocalContext) (insts : Local
           unsafetyEvidence := unsafetyEvidence
           exprHash := e.hash
         }
-    | none => pure ()  -- Type has no Zero, Inv.inv may have different semantics
+    else
+      pure ()
 
   -- Recurse into subexpressions with proper context handling.
   -- `positive` tracks logical polarity: true = asserted, false = negated/hypothesis.
@@ -414,15 +450,17 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let mut allIssues := #[]
 
   -- Analyze the type: open ALL binders first so every hypothesis is available
-  -- for guard checking, regardless of binder order (full proof-state semantics).
+  -- for guard checking. Binder-type analysis uses prop-full, data-prefix
   let typeIssues ← withLCtx emptyLCtx #[] do
     forallTelescope type fun fvars body => do
       let fullLCtx ← getLCtx
       let fullInsts ← getLocalInstances
       let mut issues := #[]
-      for fvar in fvars do
+      for j in [:fvars.size] do
+        let fvar := fvars[j]!
         let ldecl ← fvar.fvarId!.getDecl
-        for r in (← findAnalyticPatterns ldecl.type fullLCtx fullInsts) do
+        let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+        for r in (← findAnalyticPatterns ldecl.type lctxForType fullInsts) do
           issues := issues.push r
       for r in (← findAnalyticPatterns body fullLCtx fullInsts) do
         issues := issues.push r
@@ -440,9 +478,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let fullLCtx ← getLCtx
           let fullInsts ← getLocalInstances
           let mut issues := #[]
-          for fvar in fvars do
+          for j in [:fvars.size] do
+            let fvar := fvars[j]!
             let ldecl ← fvar.fvarId!.getDecl
-            for r in (← findAnalyticPatterns ldecl.type fullLCtx fullInsts) do
+            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+            for r in (← findAnalyticPatterns ldecl.type lctxForType fullInsts) do
               issues := issues.push r
           for r in (← findAnalyticPatterns body fullLCtx fullInsts) do
             issues := issues.push r

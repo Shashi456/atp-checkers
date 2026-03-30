@@ -12,9 +12,10 @@
   This is mathematically unusual and can cause formalization errors.
 
   SOUNDNESS NOTES:
-  - Uses full-scope traversal: when analyzing a binder type, ALL hypotheses
-    from the declaration signature are available for guard proving, regardless
-    of binder ordering. This matches the proof-state semantics where all
+  - Uses prop-full, data-prefix binder-type analysis: when analyzing a
+    binder type, all propositional hypotheses are available regardless of
+    binder ordering, but later data binders are excluded to prevent
+    circular derived-fact justification (see mkSafeLCtxForType).
     hypotheses are simultaneously available.
   - Conjunction-aware guard mining is polarity-aware. Sibling conjuncts are
     shared only in positive/asserted position (e.g. `x ≠ 0 ∧ 1 / x = x`). They
@@ -88,6 +89,10 @@ When called from `analyzeDecl`, the `lctx` parameter contains the FULL local
 context (all hypotheses from the declaration signature), so guard checking sees
 all available hypotheses regardless of binder order. For nested binders
 encountered during recursion, the context is extended naturally.
+
+Positive-position conjunctions share sibling facts as local hypotheses. This is
+polarity-aware: conjunctions under negation or in implication antecedents do not
+share guards.
 -/
 partial def findDivisions (e : Expr) (lctx : LocalContext) (positive : Bool := true) : MetaM (Array DivInfo) := do
   let mut results := #[]
@@ -108,7 +113,7 @@ partial def findDivisions (e : Expr) (lctx : LocalContext) (positive : Bool := t
     -- OPTIMIZATION: For safe types (ℕ, ℤ, ℚ, ℝ, ℂ), non-zero literals like 2, 3
     -- are trivially non-zero. Skip semantic checking for these cases.
     let guardEvidence ←
-      if isSyntacticNonZeroLiteral divisor && isSafeTypeForNonZeroLiteral divisorType then
+      if isSyntacticNonZeroLiteral divisor && (← isSafeTypeForNonZeroLiteral divisorType) then
         pure (some "literal")
       else
         -- Use semantic guard checking (proof-based, not syntactic)
@@ -372,14 +377,16 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let mut allDivs := #[]
 
   -- Analyze the type: open ALL binders first so every hypothesis is available
-  -- for guard checking, regardless of binder order (full proof-state semantics).
+  -- for guard checking. Binder-type analysis uses prop-full, data-prefix
   let typeDivs ← withLCtx emptyLCtx #[] do
     forallTelescope type fun fvars body => do
       let fullLCtx ← getLCtx
       let mut divs := #[]
-      for fvar in fvars do
+      for j in [:fvars.size] do
+        let fvar := fvars[j]!
         let ldecl ← fvar.fvarId!.getDecl
-        for r in (← findDivisions ldecl.type fullLCtx) do
+        let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+        for r in (← findDivisions ldecl.type lctxForType) do
           divs := divs.push r
       for r in (← findDivisions body fullLCtx) do
         divs := divs.push r
@@ -396,9 +403,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
         lambdaTelescope value fun fvars body => do
           let fullLCtx ← getLCtx
           let mut divs := #[]
-          for fvar in fvars do
+          for j in [:fvars.size] do
+            let fvar := fvars[j]!
             let ldecl ← fvar.fvarId!.getDecl
-            for r in (← findDivisions ldecl.type fullLCtx) do
+            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+            for r in (← findDivisions ldecl.type lctxForType) do
               divs := divs.push r
           for r in (← findDivisions body fullLCtx) do
             divs := divs.push r

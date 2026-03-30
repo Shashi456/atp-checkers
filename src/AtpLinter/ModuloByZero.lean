@@ -11,9 +11,10 @@
   This is mathematically unusual and can cause formalization errors.
 
   SOUNDNESS NOTES:
-  - Uses full-scope traversal: when analyzing a binder type, ALL hypotheses
-    from the declaration signature are available for guard proving, regardless
-    of binder ordering. This matches the proof-state semantics where all
+  - Uses prop-full, data-prefix binder-type analysis: when analyzing a
+    binder type, all propositional hypotheses are available regardless of
+    binder ordering, but later data binders are excluded to prevent
+    circular derived-fact justification (see mkSafeLCtxForType).
     hypotheses are simultaneously available.
   - Guard checking is proof-based via SemanticGuards
 -/
@@ -26,7 +27,7 @@ import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
 open AtpLinter.SemanticGuards
-open AtpLinter (ppExprSimple isSyntacticNonZeroLiteral isSafeTypeForNonZeroLiteral)
+open AtpLinter (ppExprSimple isSyntacticNonZeroLiteral isSafeTypeForNonZeroLiteral mkSafeLCtxForType)
 
 namespace AtpLinter.ModuloByZero
 
@@ -78,8 +79,12 @@ When called from `analyzeDecl`, the `lctx` parameter contains the FULL local
 context (all hypotheses from the declaration signature), so guard checking sees
 all available hypotheses regardless of binder order. For nested binders
 encountered during recursion, the context is extended naturally.
+
+Positive-position conjunctions share sibling facts as local hypotheses. This is
+polarity-aware: conjunctions under negation or in implication antecedents do not
+share guards.
 -/
-partial def findModulos (e : Expr) (lctx : LocalContext) : MetaM (Array ModInfo) := do
+partial def findModulos (e : Expr) (lctx : LocalContext) (positive : Bool := true) : MetaM (Array ModInfo) := do
   let mut results := #[]
   let localInsts ← getLocalInstances
 
@@ -93,7 +98,7 @@ partial def findModulos (e : Expr) (lctx : LocalContext) : MetaM (Array ModInfo)
     let divisorType ← inferType divisor
     -- OPTIMIZATION: Skip warning for non-zero literals on safe types
     let guardEvidence ←
-      if isSyntacticNonZeroLiteral divisor && isSafeTypeForNonZeroLiteral divisorType then
+      if isSyntacticNonZeroLiteral divisor && (← isSafeTypeForNonZeroLiteral divisorType) then
         pure (some "literal")
       else
         checkDivisorGuard divisor lctx localInsts
@@ -223,49 +228,70 @@ partial def findModulos (e : Expr) (lctx : LocalContext) : MetaM (Array ModInfo)
       exprHash := e.hash
     }
 
-  -- Recurse into sub-expressions, extending context for nested binders
+  -- Recurse into sub-expressions, extending context for nested binders.
+  -- `positive` tracks logical polarity: true = asserted, false = negated/hypothesis.
+  -- The conjunction rule only fires in positive position.
   match e with
   | .app f a =>
-      for r in (← findModulos f lctx) do
-        results := results.push r
-      for r in (← findModulos a lctx) do
-        results := results.push r
+      if positive && e.isAppOfArity ``And 2 then
+        let lhs := e.getAppArgs[0]!
+        let rhs := e.getAppArgs[1]!
+        let lhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd rhs fun _ => do
+            let lctx' ← getLCtx
+            findModulos lhs lctx' positive
+        for r in lhsResults do
+          results := results.push r
+        let rhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd lhs fun _ => do
+            let lctx' ← getLCtx
+            findModulos rhs lctx' positive
+        for r in rhsResults do
+          results := results.push r
+      else if f.isConstOf ``Not then
+        for r in (← findModulos a lctx (!positive)) do
+          results := results.push r
+      else
+        for r in (← findModulos f lctx positive) do
+          results := results.push r
+        for r in (← findModulos a lctx positive) do
+          results := results.push r
 
   | .lam n ty body bi =>
-      for r in (← findModulos ty lctx) do
+      for r in (← findModulos ty lctx positive) do
         results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findModulos (body.instantiate1 fvar) lctx'
+        findModulos (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .forallE n ty body bi =>
-      for r in (← findModulos ty lctx) do
+      for r in (← findModulos ty lctx (!positive)) do
         results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findModulos (body.instantiate1 fvar) lctx'
+        findModulos (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .letE name type value body _ =>
-      for r in (← findModulos type lctx) do
+      for r in (← findModulos type lctx positive) do
         results := results.push r
-      for r in (← findModulos value lctx) do
+      for r in (← findModulos value lctx positive) do
         results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
-        findModulos (body.instantiate1 fvar) lctx'
+        findModulos (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .mdata _ inner =>
-      for r in (← findModulos inner lctx) do
+      for r in (← findModulos inner lctx positive) do
         results := results.push r
 
   | .proj _ _ inner =>
-      for r in (← findModulos inner lctx) do
+      for r in (← findModulos inner lctx positive) do
         results := results.push r
 
   | _ => pure ()
@@ -311,14 +337,16 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let mut allMods := #[]
 
   -- Analyze the type: open ALL binders first so every hypothesis is available
-  -- for guard checking, regardless of binder order (full proof-state semantics).
+  -- for guard checking. Binder-type analysis uses prop-full, data-prefix
   let typeMods ← withLCtx emptyLCtx #[] do
     forallTelescope type fun fvars body => do
       let fullLCtx ← getLCtx
       let mut mods := #[]
-      for fvar in fvars do
+      for j in [:fvars.size] do
+        let fvar := fvars[j]!
         let ldecl ← fvar.fvarId!.getDecl
-        for r in (← findModulos ldecl.type fullLCtx) do
+        let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+        for r in (← findModulos ldecl.type lctxForType) do
           mods := mods.push r
       for r in (← findModulos body fullLCtx) do
         mods := mods.push r
@@ -335,9 +363,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
         lambdaTelescope value fun fvars body => do
           let fullLCtx ← getLCtx
           let mut mods := #[]
-          for fvar in fvars do
+          for j in [:fvars.size] do
+            let fvar := fvars[j]!
             let ldecl ← fvar.fvarId!.getDecl
-            for r in (← findModulos ldecl.type fullLCtx) do
+            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+            for r in (← findModulos ldecl.type lctxForType) do
               mods := mods.push r
           for r in (← findModulos body fullLCtx) do
             mods := mods.push r

@@ -29,6 +29,7 @@ import Lean.Meta.Tactic.Grind
 import AtpLinter.Basic
 import Mathlib.Tactic.Positivity
 import Mathlib.Data.Real.Sqrt
+import Mathlib.Algebra.CharZero.Defs
 
 open Lean Meta
 open Qq
@@ -39,6 +40,7 @@ namespace SemanticGuards
 /-- Where a guard proof came from (useful for debugging / stats). -/
 inductive ProvedBy where
   | assumption  -- Found directly in local context via assumptionCore
+  | structural  -- Built from reusable algebraic nonzero lemmas
   | simp        -- Closed by simp with default lemmas
   | byContra    -- Closed by falseOrByContra transformation (trivially true/false)
   | omega       -- Closed by omega tactic on linear arithmetic
@@ -71,6 +73,70 @@ private def getLocalPropHyps : MetaM (List Expr) := do
         return h :: acc
       else
         return acc
+
+
+/-- Introduce proposition-valued structure fields that are worth exposing to the
+    guard prover, such as `Subtype.property` and `Fin.isLt`. -/
+def withDerivedLocalFacts (k : MetaM α) : MetaM α := do
+  let lctx ← getLCtx
+  let facts ← lctx.foldlM (init := []) fun acc decl => do
+    if decl.isImplementationDetail then
+      return acc
+    else
+      let h : Expr := mkFVar decl.fvarId
+      let ht ← whnf (← inferType h)
+      if ht.getAppFn.isConstOf ``Subtype then
+        try
+          return (← mkAppM ``Subtype.property #[h]) :: acc
+        catch _ =>
+          return acc
+      else if ht.getAppFn.isConstOf ``Fin then
+        try
+          return (← mkAppM ``Fin.isLt #[h]) :: acc
+        catch _ =>
+          return acc
+      else
+        return acc
+  let rec go (todo : List Expr) : MetaM α := do
+    match todo with
+    | [] => k
+    | fact :: rest =>
+        let factType ← inferType fact
+        withLetDecl `_atpFact factType fact fun _ =>
+          go rest
+  go facts
+
+
+/-- Expand asserted local conjunctions into their component proofs. -/
+partial def withExpandedAndHyps (k : MetaM α) : MetaM α := do
+  let lctx ← getLCtx
+  let hyps ← lctx.foldlM (init := []) fun acc decl => do
+    if decl.isImplementationDetail then
+      return acc
+    else
+      let h : Expr := mkFVar decl.fvarId
+      let ht ← inferType h
+      if (← isProp ht) then
+        return h :: acc
+      else
+        return acc
+  let rec go (todo : List Expr) : MetaM α := do
+    match todo with
+    | [] => k
+    | h :: hs =>
+        let ht ← whnf (← inferType h)
+        if ht.isAppOfArity ``And 2 then
+          let args := ht.getAppArgs
+          let lhsType := args[0]!
+          let rhsType := args[1]!
+          let lhsProof ← mkAppM ``And.left #[h]
+          let rhsProof ← mkAppM ``And.right #[h]
+          withLetDecl `_atpAndLeft lhsType lhsProof fun lhsFVar => do
+            withLetDecl `_atpAndRight rhsType rhsProof fun rhsFVar => do
+              go (lhsFVar :: rhsFVar :: hs)
+        else
+          go hs
+  go hyps
 
 
 /-- True iff `e` has (whnf) type exactly `Nat` or `Int`. -/
@@ -273,8 +339,8 @@ Note: simp is disabled for performance - the full Mathlib simp set is too slow.
 
 This function is side-effect free (restores meta state).
 -/
-def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
-    : MetaM (Option ProvedBy) := do
+private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
+    : MetaM (Option (Expr × ProvedBy)) := do
   let saved ← Meta.saveState
   try
     let m ← mkFreshExprMVar goal
@@ -282,11 +348,27 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
 
     -- 1) assumption (very fast)
     if (← g.withContext <| g.assumptionCore) then
-      return some .assumption
+      return some ((← instantiateMVars m), ProvedBy.assumption)
 
     -- 2) positivity (fast for nonnegativity/nonzeroness goals over ordered structures)
-    if let some result ← tryPositivity? goal then
-      return some result
+    let solvedPos ← g.withContext do
+      let t : Q(Prop) ← g.getType
+      if t.approxDepth.toNat > 64 then
+        return false
+      let shouldTry ← match t with
+        | ~q(@LE.le $α $_a $z $e) => pure (isSyntacticZero z)
+        | ~q(@LT.lt $α $_a $z $e) => pure (isSyntacticZero z)
+        | ~q(@Ne $α $e $z) => pure (isSyntacticZero z)
+        | ~q(@Ne $α $z $e) => pure (isSyntacticZero z)
+        | _ => pure false
+      if !shouldTry then
+        return false
+      let proof ← withOptions (fun opts => maxRecDepth.set opts 1000000) do
+        Mathlib.Meta.Positivity.solve t
+      g.assign proof
+      pure true
+    if solvedPos && (← g.isAssigned) then
+      return some ((← instantiateMVars m), ProvedBy.positivity)
 
     -- 3) omega (when enabled) - can be slow, but necessary for Nat/Int guards
     if useOmega then
@@ -294,7 +376,7 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
       match g? with
       | none =>
           if ← g.isAssigned then
-            return some .byContra
+            return some ((← instantiateMVars m), ProvedBy.byContra)
           else
             pure ()
       | some gFalse =>
@@ -306,21 +388,131 @@ def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
           let facts ← gFalse.withContext getLocalPropHyps
           Lean.Elab.Tactic.Omega.omega facts gFalse
           if ← gFalse.isAssigned then
-            return some .omega
+            return some ((← instantiateMVars m), ProvedBy.omega)
 
     -- 4) grind (when enabled, last resort — SMT-style solver)
     if useGrind then
       -- Need a fresh mvar since the previous one may have been partially assigned
       let m' ← mkFreshExprMVar goal
       let g' := m'.mvarId!
-      if let some result ← tryGrind? g' grindConfigGuard then
-        return some result
+      let params ← Lean.Meta.Grind.mkParams grindConfigGuard default
+      let result ← Lean.Meta.Grind.main g' params
+      if result.failure?.isNone then
+        return some ((← instantiateMVars m'), ProvedBy.grind)
 
     return none
   catch _ =>
     return none
   finally
     saved.restore
+
+def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
+    : MetaM (Option ProvedBy) := do
+  return (← tryProveProof? goal (useOmega := useOmega) (useGrind := useGrind)).map Prod.snd
+
+
+/-- Try to prove `d ≠ 0` by unwrapping a cast and proving nonzero on the source type.
+    Handles `Nat.cast`, `Int.cast`, and `Rat.cast` when the target type has `CharZero`
+    (plus `DivisionRing` for Rat). For example, proves `(↑n : ℝ) ≠ 0` from `n ≠ 0`
+    on ℕ via `Nat.cast_ne_zero`. Returns a proof term and `ProvedBy` tag if successful. -/
+partial def proveCastTransport? (d : Expr) (useGrind : Bool := false)
+    : MetaM (Option (Expr × ProvedBy)) := do
+  let saved ← Meta.saveState
+  try
+    -- Check for Nat.cast (arity 3: type, NatCast instance, value)
+    if d.isAppOfArity ``Nat.cast 3 then
+      let args := d.getAppArgs
+      let targetTy := args[0]!
+      let innerVal := args[2]!
+      -- Nat.cast_ne_zero requires CharZero on the target type
+      try
+        let _ ← synthInstance (← mkAppM ``CharZero #[targetTy])
+        let natZero := Lean.mkNatLit 0
+        let innerGoal ← mkAppM ``Ne #[innerVal, natZero]
+        if let some (innerProof, _) ← tryProveProof? innerGoal true useGrind then
+          let transported ← mkAppM ``Iff.mpr #[← mkAppM ``Nat.cast_ne_zero #[innerVal], innerProof]
+          return some (transported, .structural)
+      catch _ => pure ()
+
+    -- Check for Int.cast (arity 3: type, IntCast instance, value)
+    if d.isAppOfArity ``Int.cast 3 then
+      let args := d.getAppArgs
+      let targetTy := args[0]!
+      let innerVal := args[2]!
+      try
+        let _ ← synthInstance (← mkAppM ``CharZero #[targetTy])
+        let intZero := Lean.mkIntLit 0
+        let innerGoal ← mkAppM ``Ne #[innerVal, intZero]
+        if let some (innerProof, _) ← tryProveProof? innerGoal true useGrind then
+          let transported ← mkAppM ``Iff.mpr #[← mkAppM ``Int.cast_ne_zero #[innerVal], innerProof]
+          return some (transported, .structural)
+      catch _ => pure ()
+
+    -- Check for Rat.cast (arity 3: type, RatCast instance, value)
+    if d.isAppOfArity ``Rat.cast 3 then
+      let args := d.getAppArgs
+      let targetTy := args[0]!
+      let innerVal := args[2]!
+      try
+        let _ ← synthInstance (← mkAppM ``CharZero #[targetTy])
+        match ← mkZeroOf (mkConst ``Rat) with
+        | some ratZero =>
+          let innerGoal ← mkAppM ``Ne #[innerVal, ratZero]
+          if let some (innerProof, _) ← tryProveProof? innerGoal false useGrind then
+            let transported ← mkAppM ``Iff.mpr #[← mkAppM ``Rat.cast_ne_zero #[innerVal], innerProof]
+            return some (transported, .structural)
+        | none => pure ()
+      catch _ => pure ()
+
+    return none
+  catch _ => return none
+  finally saved.restore
+
+/-- Try to prove `e ≠ 0` for a sub-expression (factor or base), using the
+    prover pipeline plus cast transport. Used by proveStructuralNonzero? to
+    compose structural decomposition with cast unwrapping. -/
+private def proveSubExprNonzero? (e : Expr) (useGrind : Bool := false)
+    : MetaM (Option (Expr × ProvedBy)) := do
+  let ty ← inferType e
+  match ← mkZeroOf ty with
+  | none => return none
+  | some zero =>
+    let goal ← Lean.Meta.mkAppM ``Ne #[e, zero]
+    if let some result ← tryProveProof? goal (← isNatOrInt e) useGrind then
+      return some result
+    if let some result ← proveCastTransport? e useGrind then
+      return some result
+    return none
+
+/-- Recursively assemble nonzero proofs for simple algebraic expressions.
+    Composes with cast transport so that `(↑m : ℝ) * (↑n : ℝ)` is handled
+    when `m ≠ 0` and `n ≠ 0` are in the local context. -/
+partial def proveStructuralNonzero? (d : Expr) (useGrind : Bool := false)
+    : MetaM (Option (Expr × ProvedBy)) := do
+  let ty ← inferType d
+  match (← mkZeroOf ty) with
+  | none => return none
+  | some _ =>
+      if d.isAppOfArity ``HMul.hMul 6 then
+        let args := d.getAppArgs
+        let lhs := args[4]!
+        let rhs := args[5]!
+        if let some (lhsProof, _) ← proveSubExprNonzero? lhs useGrind then
+          if let some (rhsProof, _) ← proveSubExprNonzero? rhs useGrind then
+            try
+              return some ((← mkAppM ``mul_ne_zero #[lhsProof, rhsProof]), ProvedBy.structural)
+            catch _ => pure ()
+
+      if d.isAppOfArity ``HPow.hPow 6 then
+        let args := d.getAppArgs
+        let base := args[4]!
+        let exp := args[5]!
+        if let some (baseProof, _) ← proveSubExprNonzero? base useGrind then
+          try
+            return some ((← mkAppM ``pow_ne_zero #[exp, baseProof]), ProvedBy.structural)
+          catch _ => pure ()
+
+      return none
 
 /-- Try to prove `goal` is False from hypotheses, using omega then grind.
     Used for vacuity checking where we want maximum power. -/
@@ -385,57 +577,82 @@ Side-effect free.
 def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
-    let ty ← inferType d
-    let omegaOk := (← isNatOrInt d)
+    withDerivedLocalFacts <| withExpandedAndHyps do
+      let ty ← inferType d
+      let omegaOk := (← isNatOrInt d)
 
-    match (← mkZeroOf ty) with
-    | none => return none
-    | some zero =>
-        -- Primary goal: d ≠ 0
-        -- omega can derive this from order facts (0 < d, d > 0, etc.)
-        try
-          let g1 ← Lean.Meta.mkAppM ``Ne #[d, zero]
-          if let some how ← tryProve? g1 omegaOk useGrind then return some how
-        catch _ => pure ()
+      match (← mkZeroOf ty) with
+      | none => return none
+      | some zero =>
+          -- Primary goal: d ≠ 0
+          -- omega can derive this from order facts (0 < d, d > 0, etc.)
+          try
+            let g1 ← Lean.Meta.mkAppM ``Ne #[d, zero]
+            if let some how ← tryProve? g1 omegaOk useGrind then return some how
+          catch _ => pure ()
 
-        -- Also try 0 ≠ d (symmetric form)
-        try
-          let g2 ← Lean.Meta.mkAppM ``Ne #[zero, d]
-          if let some how ← tryProve? g2 omegaOk useGrind then return some how
-        catch _ => pure ()
+          -- Also try 0 ≠ d (symmetric form)
+          try
+            let g2 ← Lean.Meta.mkAppM ``Ne #[zero, d]
+            if let some how ← tryProve? g2 omegaOk useGrind then return some how
+          catch _ => pure ()
 
-        -- For non-Nat/Int types (Real, Complex, etc.), check positivity hypotheses
-        -- Since 0 < d implies d ≠ 0 in any ordered semiring
-        if !omegaOk then
-          if ← findPositivityHyp d then
-            return some .positivity
+          -- Reusable algebraic closure rules like `mul_ne_zero` and `pow_ne_zero`.
+          if let some (_, how) ← proveStructuralNonzero? d useGrind then
+            return some how
 
-        return none
+          -- Cast transport: unwrap Nat.cast/Int.cast, prove nonzero on source
+          -- type, transport via Nat.cast_ne_zero / Int.cast_ne_zero (CharZero).
+          if let some (_, how) ← proveCastTransport? d useGrind then
+            return some how
+
+          -- For ordered targets, positivity is often easier to establish than
+          -- nonzeroness directly, especially for products, powers, and casted terms.
+          try
+            let gPos ← Lean.Meta.mkLt zero d
+            if let some _ ← tryProve? gPos omegaOk useGrind then
+              return some .positivity
+          catch _ => pure ()
+
+          -- For non-Nat/Int types (Real, Complex, etc.), check positivity hypotheses
+          -- Since 0 < d implies d ≠ 0 in any ordered semiring
+          if !omegaOk then
+            if ← findPositivityHyp d then
+              return some .positivity
+
+          return none
   finally
     saved.restore
 
-/-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega, optionally grind.) -/
+/-- Nat subtraction guard prover: prove `b ≤ a`. (Uses omega, optionally grind.)
+    Enriches the local context with derived facts (Subtype.property, Fin.isLt)
+    and expanded conjunctions before proving, matching proveDivisorSafe?. -/
 def proveNatSubGuard? (a b : Expr) (useGrind : Bool := false) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
-    let goal ← Lean.Meta.mkLe b a
-    tryProve? goal (useOmega := true) (useGrind := useGrind)
+    withDerivedLocalFacts <| withExpandedAndHyps do
+      let goal ← Lean.Meta.mkLe b a
+      tryProve? goal (useOmega := true) (useGrind := useGrind)
   finally
     saved.restore
 
-/-- Int-to-Nat guard prover: prove `0 ≤ x`. (Uses omega.) -/
+/-- Int-to-Nat guard prover: prove `0 ≤ x`. (Uses omega.)
+    Enriches the local context with derived facts (Subtype.property, Fin.isLt)
+    and expanded conjunctions before proving, matching proveDivisorSafe?. -/
 def proveIntNonneg? (x : Expr) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
-    let zero : Expr := Lean.mkIntLit 0
-    let goal ← Lean.Meta.mkLe zero x
-    tryProve? goal (useOmega := true) (useGrind := true)
+    withDerivedLocalFacts <| withExpandedAndHyps do
+      let zero : Expr := Lean.mkIntLit 0
+      let goal ← Lean.Meta.mkLe zero x
+      tryProve? goal (useOmega := true) (useGrind := true)
   finally
     saved.restore
 
 /-- Convert ProvedBy to a human-readable string for evidence -/
 def ProvedBy.toString : ProvedBy → String
   | .assumption => "assumption"
+  | .structural => "structural"
   | .simp => "simp"
   | .byContra => "byContra"
   | .omega => "omega"

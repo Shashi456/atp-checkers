@@ -6,6 +6,9 @@
 -/
 
 import AtpLinter
+import Mathlib.Data.PNat.Notation
+import Mathlib.Data.Real.Basic
+import Mathlib.Data.Rat.Cast.CharZero
 import Mathlib.Data.Set.Basic
 set_option linter.unusedVariables false
 
@@ -90,15 +93,104 @@ noncomputable def divGuardedProductConj (x y z : ℝ) (h : 0 < y ∧ 0 < z) : �
 /-- info: ✓ GuardProving.divGuardedProductConj: No issues detected -/
 #guard_msgs in #check_atp divGuardedProductConj
 
+/-- Separate nonzero hypotheses should guard product denominators structurally. -/
+noncomputable def divGuardedProductNe (x y z : ℝ) (hy : y ≠ 0) (hz : z ≠ 0) : ℝ := x / (y * z)
+/-- info: ✓ GuardProving.divGuardedProductNe: No issues detected -/
+#guard_msgs in #check_atp divGuardedProductNe
+
 /-- Positivity should propagate through powers for division guards. -/
 noncomputable def divGuardedSquare (x y : ℝ) (h : 0 < y) : ℝ := x / (y ^ 2)
 /-- info: ✓ GuardProving.divGuardedSquare: No issues detected -/
 #guard_msgs in #check_atp divGuardedSquare
 
+/-- Nonzero hypotheses should propagate through powers structurally. -/
+noncomputable def divGuardedPowNe (x y : ℝ) (hy : y ≠ 0) : ℝ := x / (y ^ 3)
+/-- info: ✓ GuardProving.divGuardedPowNe: No issues detected -/
+#guard_msgs in #check_atp divGuardedPowNe
+
 /-- Structured positivity should discharge square-plus-one denominators. -/
 noncomputable def divGuardedSquarePlusOne (x y : ℝ) : ℝ := x / (y ^ 2 + 1)
 /-- info: ✓ GuardProving.divGuardedSquarePlusOne: No issues detected -/
 #guard_msgs in #check_atp divGuardedSquarePlusOne
+
+/-- Subtype nonzero properties should guard projected denominators. -/
+noncomputable def divGuardedSubtypeNe (x : ℝ) (q : {q : ℝ // q ≠ 0}) : ℝ := x / q.1
+/-- info: ✓ GuardProving.divGuardedSubtypeNe: No issues detected -/
+#guard_msgs in #check_atp divGuardedSubtypeNe
+
+/-- Positive subtypes should guard casted denominators. -/
+noncomputable def divGuardedPNat (x : ℝ) (n : ℕ+) : ℝ := x / (n : ℝ)
+/-- info: ✓ GuardProving.divGuardedPNat: No issues detected -/
+#guard_msgs in #check_atp divGuardedPNat
+
+-- ============================================================
+-- Cast Transport Guard Proving
+-- ============================================================
+
+/-- Cast transport: ↑n with n > 0 should guard division on ℝ. -/
+noncomputable def divGuardedNatCastPos (x : ℝ) (n : ℕ) (h : 0 < n) : ℝ := x / (n : ℝ)
+/-- info: ✓ GuardProving.divGuardedNatCastPos: No issues detected -/
+#guard_msgs in #check_atp divGuardedNatCastPos
+
+/-- Cast transport: ↑n with n ≠ 0 should guard division on ℝ. -/
+noncomputable def divGuardedNatCastNe (x : ℝ) (n : ℕ) (h : n ≠ 0) : ℝ := x / (n : ℝ)
+/-- info: ✓ GuardProving.divGuardedNatCastNe: No issues detected -/
+#guard_msgs in #check_atp divGuardedNatCastNe
+
+/-- Cast transport: ↑k with k from Int and k ≠ 0 should guard on ℝ. -/
+noncomputable def divGuardedIntCastNe (x : ℝ) (k : ℤ) (h : k ≠ 0) : ℝ := x / (k : ℝ)
+/-- info: ✓ GuardProving.divGuardedIntCastNe: No issues detected -/
+#guard_msgs in #check_atp divGuardedIntCastNe
+
+/-- Unguarded Nat cast should still warn. -/
+noncomputable def divUnguardedNatCast (x : ℝ) (n : ℕ) : ℝ := x / (n : ℝ)
+/--
+info: Analysis of GuardProving.divUnguardedNatCast:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.divUnguardedNatCast: Potential Division by Zero
+  x / ↑n has no guard ensuring ↑n ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : ↑n ≠ 0` or `h : ↑n > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp divUnguardedNatCast
+
+/-- Cast transport: Rat cast with nonzero hypothesis. -/
+noncomputable def divGuardedRatCast (x : ℝ) (q : ℚ) (h : q ≠ 0) : ℝ := x / (q : ℝ)
+/-- info: ✓ GuardProving.divGuardedRatCast: No issues detected -/
+#guard_msgs in #check_atp divGuardedRatCast
+
+/-- Cast transport through analytic inverse: (↑n)⁻¹ with n ≠ 0. -/
+noncomputable def invGuardedNatCast (n : ℕ) (h : n ≠ 0) : ℝ := ((n : ℝ))⁻¹
+/-- info: ✓ GuardProving.invGuardedNatCast: No issues detected -/
+#guard_msgs in #check_atp invGuardedNatCast
+
+/-- Cast transport composes with structural nonzero: product of casts. -/
+noncomputable def divGuardedCastProduct (x : ℝ) (m n : ℕ) (hm : m ≠ 0) (hn : n ≠ 0) : ℝ :=
+  x / ((m : ℝ) * (n : ℝ))
+/-- info: ✓ GuardProving.divGuardedCastProduct: No issues detected -/
+#guard_msgs in #check_atp divGuardedCastProduct
+
+/-- Cast transport composes with structural nonzero: power of cast. -/
+noncomputable def divGuardedCastPow (x : ℝ) (n : ℕ) (hn : n ≠ 0) : ℝ := x / ((n : ℝ) ^ 2)
+/-- info: ✓ GuardProving.divGuardedCastPow: No issues detected -/
+#guard_msgs in #check_atp divGuardedCastPow
+
+-- ============================================================
+-- Int.toNat Guard Proving (with enrichment)
+-- ============================================================
+
+/-- Subtype-guarded Int.toNat: Subtype.property should expose 0 ≤ n. -/
+def toNatGuardedSubtype (n : {n : ℤ // 0 ≤ n}) : ℕ := n.1.toNat
+/-- info: ✓ GuardProving.toNatGuardedSubtype: No issues detected -/
+#guard_msgs in #check_atp toNatGuardedSubtype
+
+/-- Conjunction-guarded Int.toNat: And expansion should expose 0 ≤ n. -/
+def toNatGuardedConj (n : ℤ) (h : 0 ≤ n ∧ n < 100) : ℕ := n.toNat
+/-- info: ✓ GuardProving.toNatGuardedConj: No issues detected -/
+#guard_msgs in #check_atp toNatGuardedConj
 
 -- ============================================================
 -- Nat Subtraction Guard Proving
@@ -128,6 +220,39 @@ def subGuarded (a b : Nat) (h : b ≤ a) : Nat := a - b
 def subGuardedOmega (a b c : Nat) (h1 : a ≥ c) (h2 : c ≥ b) : Nat := a - b
 /-- info: ✓ GuardProving.subGuardedOmega: No issues detected -/
 #guard_msgs in #check_atp subGuardedOmega
+
+-- Should be guarded: conjunction-buried guard in positive position
+def subGuardedConjDef (a b : Nat) (h : b ≤ a ∧ a > 0) : Nat := a - b
+/-- info: ✓ GuardProving.subGuardedConjDef: No issues detected -/
+#guard_msgs in #check_atp subGuardedConjDef
+
+-- Should be guarded: conjunction with guard as second conjunct
+def subGuardedConjHyp (a b : Nat) (h : b > 0 ∧ b ≤ a) : Nat := a - b
+/-- info: ✓ GuardProving.subGuardedConjHyp: No issues detected -/
+#guard_msgs in #check_atp subGuardedConjHyp
+
+-- Should WARN: conjunction in negative position should NOT share guard
+theorem subNegativeConj (a b : Nat) : ¬ (b ≤ a ∧ a - b = 0) → True := by intro; trivial
+/--
+info: Analysis of GuardProving.subNegativeConj:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.subNegativeConj: Truncated Nat Subtraction
+  a - b has no guard ensuring b ≤ a
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : b ≤ a` or use Int instead of Nat
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp subNegativeConj
+
+-- Should be CLEAN: implication antecedent becomes a real hypothesis via
+-- forallTelescope, so b ≤ a is available from withExpandedAndHyps.
+-- Polarity tracking in the traversal affects conjunction sharing during AST
+-- walking, but binder-opened hypotheses are always real local facts.
+theorem subImplAntecedent (a b : Nat) : (b ≤ a ∧ a - b = 0) → True := by intro; trivial
+/-- info: ✓ GuardProving.subImplAntecedent: No issues detected -/
+#guard_msgs in #check_atp subImplAntecedent
 
 -- ============================================================
 -- Int.toNat Guard Proving
@@ -407,5 +532,132 @@ info: Analysis of GuardProving.antecedentConjunctionInv:
 Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp antecedentConjunctionInv
+
+-- ============================================================
+-- Non-GroupWithZero Inverse Behavior
+-- ============================================================
+
+-- ============================================================
+-- Modulo Conjunction Guard
+-- ============================================================
+
+/-- Conjunction-guarded modulo: sibling conjunct should discharge guard. -/
+def modGuardedConj (a b : Nat) (h : b ≠ 0 ∧ a % b = 0) : Prop := a % b = 0
+/-- info: ✓ GuardProving.modGuardedConj: No issues detected -/
+#guard_msgs in #check_atp modGuardedConj
+
+-- ============================================================
+-- Non-GroupWithZero type inverse should NOT be checked (no x ≠ 0 warning).
+-- Multiplicative group inverse is total — no domain issue.
+-- Note: ℤ has Inv but not GroupWithZero. The analytic checker skips it
+-- since GroupWithZero is not available.
+
+-- ============================================================
+-- Fin.isLt Success Path (positive regression)
+-- ============================================================
+
+/-- Fin.isLt from a PRECEDING binder should successfully guard a later
+    body expression. Here i : Fin n gives i.val < n, so the body
+    subtraction n - 1 is guarded when n > 0 is derivable from Fin context. -/
+def finIsLtSuccessPath (n : Nat) (i : Fin n) : Nat := n - 1
+-- Note: this warns because we can't derive 1 ≤ n from i < n alone
+-- (Fin 0 is empty so i can't exist, but the type is still valid).
+-- The Fin.isLt gives i.val < n. omega can derive n ≥ 1 from i.val < n
+-- (since i.val : Nat, i.val < n means n ≥ 1). So this SHOULD be clean.
+/-- info: ✓ GuardProving.finIsLtSuccessPath: No issues detected -/
+#guard_msgs in #check_atp finIsLtSuccessPath
+
+-- ============================================================
+-- Modulo Binder-Type Regression
+-- ============================================================
+
+/-- Modulo in binder type: Fin (n % m) should warn when m could be 0.
+    The binder's own Fin.isLt must not circularly justify m ≠ 0. -/
+def moduloBinderTypeWarn (n m : Nat) : Fin (n % m) → Nat := fun _ => 0
+/--
+info: Analysis of GuardProving.moduloBinderTypeWarn:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.moduloBinderTypeWarn: Modulo Edge Case
+  n % m has no guard ensuring m ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : m ≠ 0`. Note: in Lean, n % 0 = n
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp moduloBinderTypeWarn
+
+-- ============================================================
+-- Binder Scope: prop-full, data-prefix semantics
+-- ============================================================
+
+/-- Later independent prop guard should still pass for div0 (prop-full).
+    IntDivTruncation fires separately (a / b on Nat always truncates). -/
+def laterPropGuard (a b : Nat) (x : Fin (a / b)) (hb : b ≠ 0) : Nat := 0
+/--
+info: Analysis of GuardProving.laterPropGuard:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.laterPropGuard: Integer Division Truncation
+  a / b may truncate (truncates toward zero)
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp laterPropGuard
+
+/-- Later independent nat-sub prop guard should still pass. -/
+def laterNatSubPropGuard (n : Nat) (x : Fin (n - 1)) (h : 1 ≤ n) : Nat := 0
+/-- info: ✓ GuardProving.laterNatSubPropGuard: No issues detected -/
+#guard_msgs in #check_atp laterNatSubPropGuard
+
+/-- Same-type sibling data leak should warn (data-prefix). -/
+def siblingDataLeak (n k : Nat) (x y : Fin (n - k)) : Nat := 0
+/--
+info: Analysis of GuardProving.siblingDataLeak:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.siblingDataLeak: Truncated Nat Subtraction
+  n - k has no guard ensuring k ≤ n
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : k ≤ n` or use Int instead of Nat
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp siblingDataLeak
+
+/-- Mixed-type dependent data leak should warn (data-prefix).
+    y : {m // m < n - k} is data, not a proposition. Its Subtype.property
+    would circularly provide evidence for the earlier binder type. -/
+def mixedTypeLeak (n k : Nat) (x : Fin (n - k)) (y : {m : Nat // m < n - k}) : Nat := 0
+/--
+info: Analysis of GuardProving.mixedTypeLeak:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.mixedTypeLeak: Truncated Nat Subtraction
+  n - k has no guard ensuring k ≤ n
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : k ≤ n` or use Int instead of Nat
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp mixedTypeLeak
+
+/-- Dependent proposition on dropped binder should also be dropped.
+    h depends on x (which is data, dropped), so h is also dropped. -/
+def dependentPropLeak (n k : Nat) (x : Fin (n - k)) (h : x.1 < n - k) : Nat := 0
+/--
+info: Analysis of GuardProving.dependentPropLeak:
+──────────────────────────────────────────────────
+[WARNING] GuardProving.dependentPropLeak: Truncated Nat Subtraction
+  n - k has no guard ensuring k ≤ n
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : k ≤ n` or use Int instead of Nat
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dependentPropLeak
 
 end GuardProving

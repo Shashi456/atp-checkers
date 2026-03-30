@@ -28,7 +28,7 @@ import AtpLinter.Basic
 import AtpLinter.SemanticGuards
 
 open Lean Elab Meta Term
-open AtpLinter (ppExprSimple)
+open AtpLinter (ppExprSimple mkSafeLCtxForType)
 open AtpLinter.SemanticGuards
 
 namespace AtpLinter.ExponentTruncation
@@ -70,15 +70,15 @@ def proveExponentNonNeg? (exp : Expr) : MetaM (Option ProvedBy) := do
   let saved ← Meta.saveState
   try
     -- Check if exponent is Nat (always non-negative)
-    -- R4 fix: Use .simp instead of .assumption (it's a type fact, not a local hypothesis)
     if ← isNatType exp then
       return some .simp  -- Nat is always ≥ 0 by definition
 
-    -- For Int, try to prove 0 ≤ exp
+    -- For Int, try to prove 0 ≤ exp with enriched context
     if ← isIntType exp then
-      let zero := Lean.mkIntLit 0
-      let goal ← Lean.Meta.mkLe zero exp
-      tryProve? goal (useOmega := true)
+      withDerivedLocalFacts <| withExpandedAndHyps do
+        let zero := Lean.mkIntLit 0
+        let goal ← Lean.Meta.mkLe zero exp
+        tryProve? goal (useOmega := true)
     else
       return none
   catch _ =>
@@ -124,8 +124,8 @@ def proveDefinitelyNegative? (exp : Expr) : MetaM (Option ProvedBy) := do
     saved.restore
 
 /-- Extract exponentiation patterns from an expression -/
-partial def findExponentPatterns (e : Expr) (lctx : LocalContext) (insts : LocalInstances) :
-    MetaM (Array ExponentInfo) := do
+partial def findExponentPatterns (e : Expr) (lctx : LocalContext) (insts : LocalInstances)
+    (positive : Bool := true) : MetaM (Array ExponentInfo) := do
   let mut results := #[]
 
   -- P2 fix: Use isAppOfArity instead of fragile nested pattern match
@@ -175,48 +175,55 @@ partial def findExponentPatterns (e : Expr) (lctx : LocalContext) (insts : Local
 
   -- R3 fix: Removed Nat.pow zero-exponent check (was dead code - zero exponent just gives 1)
 
-  -- Recurse into subexpressions
+  -- Recurse into subexpressions with polarity tracking
   match e with
+  | .app f a =>
+    if positive && e.isAppOfArity ``And 2 then
+      let lhs := e.getAppArgs[0]!
+      let rhs := e.getAppArgs[1]!
+      let lhsResults ← withLCtx lctx insts do
+        withLocalDeclD `_atpAnd rhs fun _ => do
+          let lctx' ← getLCtx
+          let insts' ← getLocalInstances
+          findExponentPatterns lhs lctx' insts' positive
+      for r in lhsResults do results := results.push r
+      let rhsResults ← withLCtx lctx insts do
+        withLocalDeclD `_atpAnd lhs fun _ => do
+          let lctx' ← getLCtx
+          let insts' ← getLocalInstances
+          findExponentPatterns rhs lctx' insts' positive
+      for r in rhsResults do results := results.push r
+    else if f.isConstOf ``Not then
+      for r in (← findExponentPatterns a lctx insts (!positive)) do results := results.push r
+    else
+      for r in (← findExponentPatterns f lctx insts positive) do results := results.push r
+      for r in (← findExponentPatterns a lctx insts positive) do results := results.push r
   | .forallE n ty body bi =>
-    for r in (← findExponentPatterns ty lctx insts) do
-      results := results.push r
+    for r in (← findExponentPatterns ty lctx insts (!positive)) do results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let newLCtx ← getLCtx
       let newInsts ← getLocalInstances
-      findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts
-    for r in bodyResults do
-      results := results.push r
+      findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts positive
+    for r in bodyResults do results := results.push r
   | .lam n ty body bi =>
-    for r in (← findExponentPatterns ty lctx insts) do
-      results := results.push r
+    for r in (← findExponentPatterns ty lctx insts positive) do results := results.push r
     let bodyResults ← withLocalDecl n bi ty fun fvar => do
       let newLCtx ← getLCtx
       let newInsts ← getLocalInstances
-      findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts
-    for r in bodyResults do
-      results := results.push r
+      findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts positive
+    for r in bodyResults do results := results.push r
   | .letE n ty val body _ =>
-    for r in (← findExponentPatterns ty lctx insts) do
-      results := results.push r
-    for r in (← findExponentPatterns val lctx insts) do
-      results := results.push r
+    for r in (← findExponentPatterns ty lctx insts positive) do results := results.push r
+    for r in (← findExponentPatterns val lctx insts positive) do results := results.push r
     let bodyResults ← withLetDecl n ty val fun fvar => do
       let newLCtx ← getLCtx
       let newInsts ← getLocalInstances
-      findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts
-    for r in bodyResults do
-      results := results.push r
-  | .app f a =>
-    for r in (← findExponentPatterns f lctx insts) do
-      results := results.push r
-    for r in (← findExponentPatterns a lctx insts) do
-      results := results.push r
+      findExponentPatterns (body.instantiate1 fvar) newLCtx newInsts positive
+    for r in bodyResults do results := results.push r
   | .mdata _ inner =>
-    for r in (← findExponentPatterns inner lctx insts) do
-      results := results.push r
+    for r in (← findExponentPatterns inner lctx insts positive) do results := results.push r
   | .proj _ _ inner =>
-    for r in (← findExponentPatterns inner lctx insts) do
-      results := results.push r
+    for r in (← findExponentPatterns inner lctx insts positive) do results := results.push r
   | _ => pure ()
 
   return results
@@ -253,15 +260,17 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let mut allExps := #[]
 
   -- Analyze the type: open ALL binders first so every hypothesis is available
-  -- for guard checking, regardless of binder order (full proof-state semantics).
+  -- for guard checking. Binder-type analysis uses prop-full, data-prefix
   let typeExps ← withLCtx emptyLCtx #[] do
     forallTelescope type fun fvars body => do
       let fullLCtx ← getLCtx
       let fullInsts ← getLocalInstances
       let mut exps := #[]
-      for fvar in fvars do
+      for j in [:fvars.size] do
+        let fvar := fvars[j]!
         let ldecl ← fvar.fvarId!.getDecl
-        for r in (← findExponentPatterns ldecl.type fullLCtx fullInsts) do
+        let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+        for r in (← findExponentPatterns ldecl.type lctxForType fullInsts) do
           exps := exps.push r
       for r in (← findExponentPatterns body fullLCtx fullInsts) do
         exps := exps.push r
@@ -279,9 +288,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
           let fullLCtx ← getLCtx
           let fullInsts ← getLocalInstances
           let mut exps := #[]
-          for fvar in fvars do
+          for j in [:fvars.size] do
+            let fvar := fvars[j]!
             let ldecl ← fvar.fvarId!.getDecl
-            for r in (← findExponentPatterns ldecl.type fullLCtx fullInsts) do
+            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+            for r in (← findExponentPatterns ldecl.type lctxForType fullInsts) do
               exps := exps.push r
           for r in (← findExponentPatterns body fullLCtx fullInsts) do
             exps := exps.push r

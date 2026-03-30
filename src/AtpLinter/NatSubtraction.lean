@@ -8,10 +8,15 @@
   This is a common source of formalization errors.
 
   SOUNDNESS NOTES:
-  - Uses full-scope traversal: when analyzing a binder type, ALL hypotheses
-    from the declaration signature are available for guard proving, regardless
-    of binder ordering. This matches the proof-state semantics where all
+  - Uses prop-full, data-prefix binder-type analysis: when analyzing a
+    binder type, all propositional hypotheses are available regardless of
+    binder ordering, but later data binders are excluded to prevent
+    circular derived-fact justification (see mkSafeLCtxForType).
     hypotheses are simultaneously available.
+  - Conjunction-aware guard mining is polarity-aware. Sibling conjuncts are
+    shared only in positive/asserted position (e.g. `b ≤ a ∧ a - b = c`). They
+    are NOT shared through negation or implication antecedents, because those
+    contexts do not assert the guard.
   - Uses syntactic zero detection (NOT isDefEq) to avoid runaway reductions
 -/
 
@@ -76,8 +81,12 @@ When called from `analyzeDecl`, the `lctx` parameter contains the FULL local
 context (all hypotheses from the declaration signature), so guard checking sees
 all available hypotheses regardless of binder order. For nested binders
 encountered during recursion, the context is extended naturally.
+
+Positive-position conjunctions share sibling facts as local hypotheses. This is
+polarity-aware: conjunctions under negation or in implication antecedents do not
+share guards.
 -/
-partial def findNatSubtractions (e : Expr) (lctx : LocalContext) : MetaM (Array NatSubInfo) := do
+partial def findNatSubtractions (e : Expr) (lctx : LocalContext) (positive : Bool := true) : MetaM (Array NatSubInfo) := do
   let mut results := #[]
   let localInsts ← getLocalInstances
 
@@ -136,49 +145,75 @@ partial def findNatSubtractions (e : Expr) (lctx : LocalContext) : MetaM (Array 
         exprHash := e.hash
       }
 
-  -- Recurse into sub-expressions, extending context for nested binders
+  -- Recurse into sub-expressions, extending context for nested binders.
+  -- `positive` tracks logical polarity: true = asserted, false = negated/hypothesis.
+  -- The conjunction rule only fires in positive position.
   match e with
   | .app f a =>
-      for r in (← findNatSubtractions f lctx) do
-        results := results.push r
-      for r in (← findNatSubtractions a lctx) do
-        results := results.push r
+      if positive && e.isAppOfArity ``And 2 then
+        -- Conjunction in positive position: share sibling conjuncts as hypotheses
+        let lhs := e.getAppArgs[0]!
+        let rhs := e.getAppArgs[1]!
+
+        let lhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd rhs fun _ => do
+            let lctx' ← getLCtx
+            findNatSubtractions lhs lctx' positive
+        for r in lhsResults do
+          results := results.push r
+
+        let rhsResults ← withLCtx lctx localInsts do
+          withLocalDeclD `_atpAnd lhs fun _ => do
+            let lctx' ← getLCtx
+            findNatSubtractions rhs lctx' positive
+        for r in rhsResults do
+          results := results.push r
+      else if f.isConstOf ``Not then
+        -- Negation: flip polarity for the argument
+        for r in (← findNatSubtractions a lctx (!positive)) do
+          results := results.push r
+      else
+        for r in (← findNatSubtractions f lctx positive) do
+          results := results.push r
+        for r in (← findNatSubtractions a lctx positive) do
+          results := results.push r
 
   | .lam n ty body bi =>
-      for r in (← findNatSubtractions ty lctx) do
+      for r in (← findNatSubtractions ty lctx positive) do
         results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findNatSubtractions (body.instantiate1 fvar) lctx'
+        findNatSubtractions (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .forallE n ty body bi =>
-      for r in (← findNatSubtractions ty lctx) do
+      -- Type (hypothesis) is in flipped polarity; body (conclusion) keeps same
+      for r in (← findNatSubtractions ty lctx (!positive)) do
         results := results.push r
       let bodyResults ← withLocalDecl n bi ty fun fvar => do
         let lctx' ← getLCtx
-        findNatSubtractions (body.instantiate1 fvar) lctx'
+        findNatSubtractions (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .letE name type value body _ =>
-      for r in (← findNatSubtractions type lctx) do
+      for r in (← findNatSubtractions type lctx positive) do
         results := results.push r
-      for r in (← findNatSubtractions value lctx) do
+      for r in (← findNatSubtractions value lctx positive) do
         results := results.push r
       let bodyResults ← withLetDecl name type value fun fvar => do
         let lctx' ← getLCtx
-        findNatSubtractions (body.instantiate1 fvar) lctx'
+        findNatSubtractions (body.instantiate1 fvar) lctx' positive
       for r in bodyResults do
         results := results.push r
 
   | .mdata _ inner =>
-      for r in (← findNatSubtractions inner lctx) do
+      for r in (← findNatSubtractions inner lctx positive) do
         results := results.push r
 
   | .proj _ _ inner =>
-      for r in (← findNatSubtractions inner lctx) do
+      for r in (← findNatSubtractions inner lctx positive) do
         results := results.push r
 
   | _ => pure ()
@@ -222,14 +257,21 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let mut allSubs := #[]
 
   -- Analyze the type: open ALL binders first so every hypothesis is available
-  -- for guard checking, regardless of binder order (full proof-state semantics).
+  -- for guard checking. Binder-type analysis uses prop-full, data-prefix
   let typeSubs ← withLCtx emptyLCtx #[] do
     forallTelescope type fun fvars body => do
       let fullLCtx ← getLCtx
       let mut subs := #[]
-      for fvar in fvars do
+      for j in [:fvars.size] do
+        let fvar := fvars[j]!
         let ldecl ← fvar.fvarId!.getDecl
-        for r in (← findNatSubtractions ldecl.type fullLCtx) do
+        -- Only use preceding binders (0..j-1) when analyzing binder j's type.
+        -- Later binders did not exist when this type was written, so their
+        -- derived facts (Fin.isLt, Subtype.property) must not circularly
+        -- justify the type. E.g. (x y : Fin (n - k)) — neither x nor y
+        -- should contribute Fin.isLt to prove k ≤ n.
+        let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+        for r in (← findNatSubtractions ldecl.type lctxForType) do
           subs := subs.push r
       for r in (← findNatSubtractions body fullLCtx) do
         subs := subs.push r
@@ -246,9 +288,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
         lambdaTelescope value fun fvars body => do
           let fullLCtx ← getLCtx
           let mut subs := #[]
-          for fvar in fvars do
+          for j in [:fvars.size] do
+            let fvar := fvars[j]!
             let ldecl ← fvar.fvarId!.getDecl
-            for r in (← findNatSubtractions ldecl.type fullLCtx) do
+            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+            for r in (← findNatSubtractions ldecl.type lctxForType) do
               subs := subs.push r
           for r in (← findNatSubtractions body fullLCtx) do
             subs := subs.push r
