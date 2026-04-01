@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@ai-mo-test:2026-03-30T20:50:55.158853+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 244,
+  "status_counts": {
+    "ok": 215,
+    "findings": 27,
+    "compile_error": 1,
+    "timeout": 1,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 33,
+    "with_findings": 1,
+    "without_findings": 32,
+    "compile_only": 1
+  },
+  "total_findings": 37,
+  "confidence_counts": {
+    "proven": 1,
+    "maybe": 36
+  },
+  "findings_by_category": {
+    "Potential Division by Zero": {
+      "total": 17,
+      "proven": 0,
+      "maybe": 17
+    },
+    "Truncated Nat Subtraction": {
+      "total": 6,
+      "proven": 0,
+      "maybe": 6
+    },
+    "Analytic Domain Totalization": {
+      "total": 5,
+      "proven": 0,
+      "maybe": 5
+    },
+    "Linter Internal Error": {
+      "total": 5,
+      "proven": 0,
+      "maybe": 5
+    },
+    "Integer Division Truncation": {
+      "total": 3,
+      "proven": 1,
+      "maybe": 2
+    },
+    "Unused Quantified Variable": {
+      "total": 1,
+      "proven": 0,
+      "maybe": 1
+    }
+  },
+  "proved_by_counts": {
+    "none": 36,
+    "definitional": 1
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "run_id": "formalmath@all:2026-03-30T21:36:27.591704+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 5560,
+  "status_counts": {
+    "ok": 3729,
+    "findings": 1797,
+    "compile_error": 8,
+    "timeout": 26,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 288,
+    "with_findings": 61,
+    "without_findings": 227,
+    "compile_only": 8
+  },
+  "total_findings": 3250,
+  "confidence_counts": {
+    "proven": 141,
+    "maybe": 3109
+  },
+  "findings_by_category": {
+    "Potential Division by Zero": {
+      "total": 1127,
+      "proven": 0,
+      "maybe": 1127
+    },
+    "Truncated Nat Subtraction": {
+      "total": 582,
+      "proven": 1,
+      "maybe": 581
+    },
+    "Integer Division Truncation": {
+      "total": 423,
+      "proven": 66,
+      "maybe": 357
+    },
+    "Analytic Domain Totalization": {
+      "total": 351,
+      "proven": 0,
+      "maybe": 351
+    },
+    "Unused Quantified Variable": {
+      "total": 318,
+      "proven": 0,
+      "maybe": 318
+    },
+    "0-Indexed Range": {
+      "total": 188,
+      "proven": 0,
+      "maybe": 188
+    },
+    "Linter Internal Error": {
+      "total": 157,
+      "proven": 0,
+      "maybe": 157
+    },
+    "Counterexample Found": {
+      "total": 55,
+      "proven": 55,
+      "maybe": 0
+    },
+    "Modulo Edge Case": {
+      "total": 48,
+      "proven": 18,
+      "maybe": 30
+    },
+    "Vacuous Theorem": {
+      "total": 1,
+      "proven": 1,
+      "maybe": 0
+    }
+  },
+  "proved_by_counts": {
+    "none": 3109,
+    "definitional": 66,
+    "decide": 45,
+    "omega": 20,
+    "plausible": 10
+  }
+}

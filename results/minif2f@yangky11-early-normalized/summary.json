@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@yangky11-early-normalized:2026-03-30T22:02:09.194633+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 488,
+  "status_counts": {
+    "ok": 416,
+    "findings": 62,
+    "compile_error": 0,
+    "timeout": 10,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 63,
+    "with_findings": 2,
+    "without_findings": 61,
+    "compile_only": 0
+  },
+  "total_findings": 79,
+  "confidence_counts": {
+    "proven": 13,
+    "maybe": 66
+  },
+  "findings_by_category": {
+    "Truncated Nat Subtraction": {
+      "total": 19,
+      "proven": 0,
+      "maybe": 19
+    },
+    "Integer Division Truncation": {
+      "total": 15,
+      "proven": 7,
+      "maybe": 8
+    },
+    "Potential Division by Zero": {
+      "total": 14,
+      "proven": 0,
+      "maybe": 14
+    },
+    "Linter Internal Error": {
+      "total": 10,
+      "proven": 0,
+      "maybe": 10
+    },
+    "Analytic Domain Totalization": {
+      "total": 9,
+      "proven": 0,
+      "maybe": 9
+    },
+    "Counterexample Found": {
+      "total": 5,
+      "proven": 5,
+      "maybe": 0
+    },
+    "0-Indexed Range": {
+      "total": 3,
+      "proven": 0,
+      "maybe": 3
+    },
+    "Unused Quantified Variable": {
+      "total": 2,
+      "proven": 0,
+      "maybe": 2
+    },
+    "Modulo Edge Case": {
+      "total": 1,
+      "proven": 0,
+      "maybe": 1
+    },
+    "Vacuous Theorem": {
+      "total": 1,
+      "proven": 1,
+      "maybe": 0
+    }
+  },
+  "proved_by_counts": {
+    "none": 66,
+    "definitional": 7,
+    "decide": 3,
+    "plausible": 2,
+    "omega": 1
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@yangky11-early:2026-03-30T21:19:23.649149+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 488,
+  "status_counts": {
+    "ok": 0,
+    "findings": 0,
+    "compile_error": 488,
+    "timeout": 0,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 488,
+    "with_findings": 0,
+    "without_findings": 488,
+    "compile_only": 488
+  },
+  "total_findings": 0,
+  "confidence_counts": {
+    "proven": 0,
+    "maybe": 0
+  },
+  "findings_by_category": {},
+  "proved_by_counts": {}
+}

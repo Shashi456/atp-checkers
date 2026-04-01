@@ -238,7 +238,8 @@ atp-checkers/
 
 ```bash
 # Clone and build
-git clone https://github.com/Shashi456/atp-checkers.git
+git clone <repository-url>
+
 cd atp-checkers
 lake build                    # ~36 compile jobs
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "run_id": "formalmath@all:2026-03-30T21:36:27.591704+00:00",
+  "started_at": "2026-03-30T21:36:27.591704+00:00",
+  "dataset": {
+    "input": "/home/user/bench-inputs/fullrun-date/formalmath@all/full.jsonl",
+    "resolved_name": "full",
+    "format": "jsonl",
+    "split": null,
+    "header_file": null,
+    "total_hint": 5560
+  },
+  "execution": {
+    "workspace": ".",
+    "toolchain": "leanprover/lean4:v4.28.0",
+    "backend": "subprocess",
+    "workers": 10,
+    "timeout": 30,
+    "output_dir": "results/fullrun-date/formalmath@all",
+    "resuming": false
+  }
+}
