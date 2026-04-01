@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "proofnet@sharp:2026-03-30T20:26:37.225131+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 371,
+  "status_counts": {
+    "ok": 322,
+    "findings": 49,
+    "compile_error": 0,
+    "timeout": 0,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 371,
+    "with_findings": 49,
+    "without_findings": 322,
+    "compile_only": 0
+  },
+  "total_findings": 67,
+  "confidence_counts": {
+    "proven": 1,
+    "maybe": 66
+  },
+  "findings_by_category": {
+    "Unused Quantified Variable": {
+      "total": 35,
+      "proven": 0,
+      "maybe": 35
+    },
+    "Potential Division by Zero": {
+      "total": 11,
+      "proven": 0,
+      "maybe": 11
+    },
+    "Analytic Domain Totalization": {
+      "total": 8,
+      "proven": 0,
+      "maybe": 8
+    },
+    "Truncated Nat Subtraction": {
+      "total": 6,
+      "proven": 0,
+      "maybe": 6
+    },
+    "Integer Division Truncation": {
+      "total": 4,
+      "proven": 0,
+      "maybe": 4
+    },
+    "Linter Internal Error": {
+      "total": 2,
+      "proven": 0,
+      "maybe": 2
+    },
+    "Counterexample Found": {
+      "total": 1,
+      "proven": 1,
+      "maybe": 0
+    }
+  },
+  "proved_by_counts": {
+    "none": 66,
+    "plausible": 1
+  }
+}

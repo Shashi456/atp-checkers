@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "combibench@hf:2026-03-30T20:24:30.388743+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 100,
+  "status_counts": {
+    "ok": 59,
+    "findings": 35,
+    "compile_error": 0,
+    "timeout": 6,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 9,
+    "with_findings": 6,
+    "without_findings": 3,
+    "compile_only": 0
+  },
+  "total_findings": 78,
+  "confidence_counts": {
+    "proven": 1,
+    "maybe": 77
+  },
+  "findings_by_category": {
+    "Truncated Nat Subtraction": {
+      "total": 27,
+      "proven": 0,
+      "maybe": 27
+    },
+    "Unused Quantified Variable": {
+      "total": 24,
+      "proven": 0,
+      "maybe": 24
+    },
+    "Linter Internal Error": {
+      "total": 15,
+      "proven": 0,
+      "maybe": 15
+    },
+    "0-Indexed Range": {
+      "total": 8,
+      "proven": 0,
+      "maybe": 8
+    },
+    "Integer Division Truncation": {
+      "total": 2,
+      "proven": 0,
+      "maybe": 2
+    },
+    "Counterexample Found": {
+      "total": 1,
+      "proven": 1,
+      "maybe": 0
+    },
+    "Potential Division by Zero": {
+      "total": 1,
+      "proven": 0,
+      "maybe": 1
+    }
+  },
+  "proved_by_counts": {
+    "none": 77,
+    "plausible": 1
+  }
+}

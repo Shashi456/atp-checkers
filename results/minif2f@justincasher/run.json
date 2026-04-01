@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@justincasher:2026-03-30T20:55:01.838688+00:00",
+  "started_at": "2026-03-30T20:55:01.838688+00:00",
+  "dataset": {
+    "input": "/home/user/bench-inputs/fullrun-date/minif2f@justincasher/full.jsonl",
+    "resolved_name": "full",
+    "format": "jsonl",
+    "split": null,
+    "header_file": null,
+    "total_hint": 485
+  },
+  "execution": {
+    "workspace": ".",
+    "toolchain": "leanprover/lean4:v4.28.0",
+    "backend": "subprocess",
+    "workers": 10,
+    "timeout": 30,
+    "output_dir": "results/fullrun-date/minif2f@justincasher",
+    "resuming": false
+  }
+}

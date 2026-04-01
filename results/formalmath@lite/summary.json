@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "run_id": "formalmath@lite:2026-03-30T20:43:57.746734+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 425,
+  "status_counts": {
+    "ok": 306,
+    "findings": 117,
+    "compile_error": 1,
+    "timeout": 1,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 25,
+    "with_findings": 5,
+    "without_findings": 20,
+    "compile_only": 1
+  },
+  "total_findings": 213,
+  "confidence_counts": {
+    "proven": 6,
+    "maybe": 207
+  },
+  "findings_by_category": {
+    "Potential Division by Zero": {
+      "total": 80,
+      "proven": 0,
+      "maybe": 80
+    },
+    "Truncated Nat Subtraction": {
+      "total": 34,
+      "proven": 0,
+      "maybe": 34
+    },
+    "Analytic Domain Totalization": {
+      "total": 33,
+      "proven": 0,
+      "maybe": 33
+    },
+    "Integer Division Truncation": {
+      "total": 25,
+      "proven": 4,
+      "maybe": 21
+    },
+    "Unused Quantified Variable": {
+      "total": 15,
+      "proven": 0,
+      "maybe": 15
+    },
+    "Linter Internal Error": {
+      "total": 12,
+      "proven": 0,
+      "maybe": 12
+    },
+    "0-Indexed Range": {
+      "total": 9,
+      "proven": 0,
+      "maybe": 9
+    },
+    "Modulo Edge Case": {
+      "total": 4,
+      "proven": 1,
+      "maybe": 3
+    },
+    "Counterexample Found": {
+      "total": 1,
+      "proven": 1,
+      "maybe": 0
+    }
+  },
+  "proved_by_counts": {
+    "none": 207,
+    "definitional": 4,
+    "omega": 1,
+    "decide": 1
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@harmonic:2026-03-30T21:11:13.823469+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 485,
+  "status_counts": {
+    "ok": 425,
+    "findings": 58,
+    "compile_error": 0,
+    "timeout": 2,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 60,
+    "with_findings": 3,
+    "without_findings": 57,
+    "compile_only": 0
+  },
+  "total_findings": 74,
+  "confidence_counts": {
+    "proven": 0,
+    "maybe": 74
+  },
+  "findings_by_category": {
+    "Potential Division by Zero": {
+      "total": 25,
+      "proven": 0,
+      "maybe": 25
+    },
+    "Analytic Domain Totalization": {
+      "total": 16,
+      "proven": 0,
+      "maybe": 16
+    },
+    "Truncated Nat Subtraction": {
+      "total": 13,
+      "proven": 0,
+      "maybe": 13
+    },
+    "Linter Internal Error": {
+      "total": 9,
+      "proven": 0,
+      "maybe": 9
+    },
+    "Integer Division Truncation": {
+      "total": 5,
+      "proven": 0,
+      "maybe": 5
+    },
+    "Unused Quantified Variable": {
+      "total": 5,
+      "proven": 0,
+      "maybe": 5
+    },
+    "0-Indexed Range": {
+      "total": 1,
+      "proven": 0,
+      "maybe": 1
+    }
+  },
+  "proved_by_counts": {
+    "none": 74
+  }
+}

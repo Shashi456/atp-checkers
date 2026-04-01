@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "run_id": "proofnet@deepseek-port:2026-03-30T20:32:38.478560+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 371,
+  "status_counts": {
+    "ok": 317,
+    "findings": 54,
+    "compile_error": 0,
+    "timeout": 0,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 371,
+    "with_findings": 54,
+    "without_findings": 317,
+    "compile_only": 0
+  },
+  "total_findings": 82,
+  "confidence_counts": {
+    "proven": 5,
+    "maybe": 77
+  },
+  "findings_by_category": {
+    "Unused Quantified Variable": {
+      "total": 39,
+      "proven": 0,
+      "maybe": 39
+    },
+    "Potential Division by Zero": {
+      "total": 13,
+      "proven": 0,
+      "maybe": 13
+    },
+    "Analytic Domain Totalization": {
+      "total": 8,
+      "proven": 0,
+      "maybe": 8
+    },
+    "Truncated Nat Subtraction": {
+      "total": 8,
+      "proven": 0,
+      "maybe": 8
+    },
+    "Counterexample Found": {
+      "total": 5,
+      "proven": 5,
+      "maybe": 0
+    },
+    "0-Indexed Range": {
+      "total": 4,
+      "proven": 0,
+      "maybe": 4
+    },
+    "Integer Division Truncation": {
+      "total": 3,
+      "proven": 0,
+      "maybe": 3
+    },
+    "Linter Internal Error": {
+      "total": 2,
+      "proven": 0,
+      "maybe": 2
+    }
+  },
+  "proved_by_counts": {
+    "none": 77,
+    "decide": 3,
+    "plausible": 2
+  }
+}

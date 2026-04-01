@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@v2c:2026-03-30T21:28:21.218145+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 488,
+  "status_counts": {
+    "ok": 367,
+    "findings": 119,
+    "compile_error": 1,
+    "timeout": 1,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 8,
+    "with_findings": 1,
+    "without_findings": 7,
+    "compile_only": 1
+  },
+  "total_findings": 193,
+  "confidence_counts": {
+    "proven": 8,
+    "maybe": 185
+  },
+  "findings_by_category": {
+    "Potential Division by Zero": {
+      "total": 45,
+      "proven": 0,
+      "maybe": 45
+    },
+    "0-Indexed Range": {
+      "total": 39,
+      "proven": 0,
+      "maybe": 39
+    },
+    "Analytic Domain Totalization": {
+      "total": 31,
+      "proven": 0,
+      "maybe": 31
+    },
+    "Truncated Nat Subtraction": {
+      "total": 28,
+      "proven": 0,
+      "maybe": 28
+    },
+    "Integer Division Truncation": {
+      "total": 20,
+      "proven": 5,
+      "maybe": 15
+    },
+    "Unused Quantified Variable": {
+      "total": 17,
+      "proven": 0,
+      "maybe": 17
+    },
+    "Linter Internal Error": {
+      "total": 9,
+      "proven": 0,
+      "maybe": 9
+    },
+    "Counterexample Found": {
+      "total": 3,
+      "proven": 3,
+      "maybe": 0
+    },
+    "Modulo Edge Case": {
+      "total": 1,
+      "proven": 0,
+      "maybe": 1
+    }
+  },
+  "proved_by_counts": {
+    "none": 185,
+    "definitional": 5,
+    "decide": 3
+  }
+}

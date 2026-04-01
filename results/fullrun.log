@@ -1,0 +1,808 @@
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/combibench@hf/full.jsonl...
+Loaded dataset with 100 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/combibench@hf/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+FF....FF..F.F..FF..FTFFFFFT...FFTT........F...FFF. [50/100]
+...........F....TF......F.FFFF..T....FFFF...F.FFF. [100/100]
+
+
+==================================================
+Summary
+==================================================
+Total problems:  100
+  OK:            59
+  Findings:      35
+  Compile Only:  0
+  Timeout:       6
+  Infra Error:   0
+  Compile Flag:  9
+    With Findings:    6
+    Without Findings: 3
+
+Total findings:  78
+  Proven:        1
+  Maybe:         77
+
+Findings by category:
+  Truncated Nat Subtraction                  27  (proven: 0, maybe: 27)
+  Unused Quantified Variable                 24  (proven: 0, maybe: 24)
+  Linter Internal Error                      15  (proven: 0, maybe: 15)
+  0-Indexed Range                             8  (proven: 0, maybe: 8)
+  Integer Division Truncation                 2  (proven: 0, maybe: 2)
+  Counterexample Found                        1  (proven: 1, maybe: 0)
+  Potential Division by Zero                  1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                   77
+  plausible               1
+
+Results:  results/fullrun-date/combibench@hf/results.jsonl
+Run:      results/fullrun-date/combibench@hf/run.json
+Summary:  results/fullrun-date/combibench@hf/summary.json
+Logs:     results/fullrun-date/combibench@hf/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/proofnet@sharp/full.jsonl...
+Loaded dataset with 371 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/proofnet@sharp/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+..........................................F....... [50/371]
+.................F.......F.......F..........F.F... [100/371]
+FFF......F...........................F..FF..F..... [150/371]
+.F.FFF.F...............F.F..F....FF............... [200/371]
+......FF..F..................F.................... [250/371]
+......F.................F....F.FFF....F........... [300/371]
+......F..................FF.F.FF......FF...F.FF... [350/371]
+........F..F....F....
+
+==================================================
+Summary
+==================================================
+Total problems:  371
+  OK:            322
+  Findings:      49
+  Compile Only:  0
+  Timeout:       0
+  Infra Error:   0
+  Compile Flag:  371
+    With Findings:    49
+    Without Findings: 322
+
+Total findings:  67
+  Proven:        1
+  Maybe:         66
+
+Findings by category:
+  Unused Quantified Variable                 35  (proven: 0, maybe: 35)
+  Potential Division by Zero                 11  (proven: 0, maybe: 11)
+  Analytic Domain Totalization                8  (proven: 0, maybe: 8)
+  Truncated Nat Subtraction                   6  (proven: 0, maybe: 6)
+  Integer Division Truncation                 4  (proven: 0, maybe: 4)
+  Linter Internal Error                       2  (proven: 0, maybe: 2)
+  Counterexample Found                        1  (proven: 1, maybe: 0)
+
+Proved by:
+  none                   66
+  plausible               1
+
+Results:  results/fullrun-date/proofnet@sharp/results.jsonl
+Run:      results/fullrun-date/proofnet@sharp/run.json
+Summary:  results/fullrun-date/proofnet@sharp/summary.json
+Logs:     results/fullrun-date/proofnet@sharp/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/proofnet@deepseek-port/full.jsonl...
+Loaded dataset with 371 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/proofnet@deepseek-port/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+..F....F....F.F.......F..FFFF.F...FF...F.F........ [50/371]
+...............FF...FF...........F...............F [100/371]
+........F..F......F......F....FFFFF............... [150/371]
+...........................F.F.F...F.............. [200/371]
+...........F........F..F.......................... [250/371]
+....................F...............F............. [300/371]
+.F.......F............................FF.FFF...F.. [350/371]
+F.FFF.........FFF...F
+
+==================================================
+Summary
+==================================================
+Total problems:  371
+  OK:            317
+  Findings:      54
+  Compile Only:  0
+  Timeout:       0
+  Infra Error:   0
+  Compile Flag:  371
+    With Findings:    54
+    Without Findings: 317
+
+Total findings:  82
+  Proven:        5
+  Maybe:         77
+
+Findings by category:
+  Unused Quantified Variable                 39  (proven: 0, maybe: 39)
+  Potential Division by Zero                 13  (proven: 0, maybe: 13)
+  Analytic Domain Totalization                8  (proven: 0, maybe: 8)
+  Truncated Nat Subtraction                   8  (proven: 0, maybe: 8)
+  Counterexample Found                        5  (proven: 5, maybe: 0)
+  0-Indexed Range                             4  (proven: 0, maybe: 4)
+  Integer Division Truncation                 3  (proven: 0, maybe: 3)
+  Linter Internal Error                       2  (proven: 0, maybe: 2)
+
+Proved by:
+  none                   77
+  decide                  3
+  plausible               2
+
+Results:  results/fullrun-date/proofnet@deepseek-port/results.jsonl
+Run:      results/fullrun-date/proofnet@deepseek-port/run.json
+Summary:  results/fullrun-date/proofnet@deepseek-port/summary.json
+Logs:     results/fullrun-date/proofnet@deepseek-port/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/proverbenchmath@deepseek/full.jsonl...
+Loaded dataset with 325 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/proverbenchmath@deepseek/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+.F..F....F...FFF..FFF.F...FF.F.F.F.FFFFF.F.FFF..F. [50/325]
+FFF..........FFF.....FFF.FF.F.....F.F.F.FF.F.FFF.. [100/325]
+FFFFF.FF.F.FF.FFFFF..F...FFF.F.FF......FFF...F..FF [150/325]
+..........F....F.F..F...F.F.F...F.F.FFFFFFFFFFFF.. [200/325]
+.FFFF......FF...FFFFF.F..FF..FFFFFF..F..FFF....FFF [250/325]
+.FFFF..FFFFFF..F.FFFFF..FFF.FFFF.FF....FF.FF...FFF [300/325]
+FFF.F.FFFFFFFFF.FFF.FFFFF
+
+==================================================
+Summary
+==================================================
+Total problems:  325
+  OK:            150
+  Findings:      175
+  Compile Only:  0
+  Timeout:       0
+  Infra Error:   0
+  Compile Flag:  317
+    With Findings:    171
+    Without Findings: 146
+
+Total findings:  370
+  Proven:        208
+  Maybe:         162
+
+Findings by category:
+  Unsound Axiom                             199  (proven: 199, maybe: 0)
+  Potential Division by Zero                 81  (proven: 0, maybe: 81)
+  Unused Quantified Variable                 48  (proven: 0, maybe: 48)
+  Analytic Domain Totalization               19  (proven: 0, maybe: 19)
+  Truncated Nat Subtraction                   7  (proven: 0, maybe: 7)
+  Integer Division Truncation                 6  (proven: 4, maybe: 2)
+  Counterexample Found                        5  (proven: 5, maybe: 0)
+  Linter Internal Error                       2  (proven: 0, maybe: 2)
+  0-Indexed Range                             2  (proven: 0, maybe: 2)
+  Modulo Edge Case                            1  (proven: 0, maybe: 1)
+
+Proved by:
+  structural            199
+  none                  162
+  definitional            4
+  decide                  3
+  plausible               2
+
+Results:  results/fullrun-date/proverbenchmath@deepseek/results.jsonl
+Run:      results/fullrun-date/proverbenchmath@deepseek/run.json
+Summary:  results/fullrun-date/proverbenchmath@deepseek/summary.json
+Logs:     results/fullrun-date/proverbenchmath@deepseek/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/formalmath@lite/full.jsonl...
+Loaded dataset with 425 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/formalmath@lite/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+F..F....F......F.F.....F....F....FF......F.FFFF.F. [50/425]
+F.....F.F.F..FFF.F.FF...FF.......F......F....F..F. [100/425]
+..F.................F..........F........F.F....... [150/425]
+.F.F.F..........F.F.F..F.....FF..F.FFF......F...F. [200/425]
+..F.T.....F.F.............F.F..FF.FF..FFFF.F...... [250/425]
+F..FFF.F..F.F.FF..F....FF.......F..FFF....F.F...F. [300/425]
+..........F...FFWARNING: Import-bundle cache compile failed for AtpCache.Imports_519bc94aab6ef8b9: /home/user/repo/.atp_import_cache/AtpCache/Imports_519bc94aab6ef8b9.lean:1:0: error: object file '/home/user/repo/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib/Algebra/BigOperators/Ring.olean' of module Mathlib.Algebra.BigOperators.Ring does not exist
+
+.F..FFFFEFF...F.................F. [350/425]
+.........F....F.............F...FFF..F....F.....F. [400/425]
+FF........FFFFFF.FFF..F..
+
+==================================================
+Summary
+==================================================
+Total problems:  425
+  OK:            306
+  Findings:      117
+  Compile Only:  1
+  Timeout:       1
+  Infra Error:   0
+  Compile Flag:  25
+    With Findings:    5
+    Without Findings: 20
+
+Total findings:  213
+  Proven:        6
+  Maybe:         207
+
+Findings by category:
+  Potential Division by Zero                 80  (proven: 0, maybe: 80)
+  Truncated Nat Subtraction                  34  (proven: 0, maybe: 34)
+  Analytic Domain Totalization               33  (proven: 0, maybe: 33)
+  Integer Division Truncation                25  (proven: 4, maybe: 21)
+  Unused Quantified Variable                 15  (proven: 0, maybe: 15)
+  Linter Internal Error                      12  (proven: 0, maybe: 12)
+  0-Indexed Range                             9  (proven: 0, maybe: 9)
+  Modulo Edge Case                            4  (proven: 1, maybe: 3)
+  Counterexample Found                        1  (proven: 1, maybe: 0)
+
+Proved by:
+  none                  207
+  definitional            4
+  omega                   1
+  decide                  1
+
+Results:  results/fullrun-date/formalmath@lite/results.jsonl
+Run:      results/fullrun-date/formalmath@lite/run.json
+Summary:  results/fullrun-date/formalmath@lite/summary.json
+Logs:     results/fullrun-date/formalmath@lite/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@ai-mo-test/full.jsonl...
+Loaded dataset with 244 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@ai-mo-test/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+..FF........F...............................F..... [50/244]
+....F..............................T..F........... [100/244]
+.F.....F......F........F..FFF....F..........F....F [150/244]
+..............F..FFFF...F.........E...........F... [200/244]
+F.....F.............F.........F.............
+
+==================================================
+Summary
+==================================================
+Total problems:  244
+  OK:            215
+  Findings:      27
+  Compile Only:  1
+  Timeout:       1
+  Infra Error:   0
+  Compile Flag:  33
+    With Findings:    1
+    Without Findings: 32
+
+Total findings:  37
+  Proven:        1
+  Maybe:         36
+
+Findings by category:
+  Potential Division by Zero                 17  (proven: 0, maybe: 17)
+  Truncated Nat Subtraction                   6  (proven: 0, maybe: 6)
+  Analytic Domain Totalization                5  (proven: 0, maybe: 5)
+  Linter Internal Error                       5  (proven: 0, maybe: 5)
+  Integer Division Truncation                 3  (proven: 1, maybe: 2)
+  Unused Quantified Variable                  1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                   36
+  definitional            1
+
+Results:  results/fullrun-date/minif2f@ai-mo-test/results.jsonl
+Run:      results/fullrun-date/minif2f@ai-mo-test/run.json
+Summary:  results/fullrun-date/minif2f@ai-mo-test/summary.json
+Logs:     results/fullrun-date/minif2f@ai-mo-test/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@justincasher/full.jsonl...
+Loaded dataset with 485 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@justincasher/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+........F.F.........F.F....F.........F......F..... [50/485]
+.................FF..........F...F................ [100/485]
+..........F....F........F..F...................... [150/485]
+.F.......F........F...........F.F.....F.....F.F... [200/485]
+.......................F.........FF.F.F.F......... [250/485]
+............F........FF........T.F..F......F...... [300/485]
+..........F.F.....F..........T......F............. [350/485]
+......................F.......F......F..........F. [400/485]
+F..............F......FF..F..F..........FFF...F... [450/485]
+.............FFF.........F.....F...
+
+==================================================
+Summary
+==================================================
+Total problems:  485
+  OK:            425
+  Findings:      58
+  Compile Only:  0
+  Timeout:       2
+  Infra Error:   0
+  Compile Flag:  60
+    With Findings:    3
+    Without Findings: 57
+
+Total findings:  74
+  Proven:        0
+  Maybe:         74
+
+Findings by category:
+  Potential Division by Zero                 25  (proven: 0, maybe: 25)
+  Analytic Domain Totalization               16  (proven: 0, maybe: 16)
+  Truncated Nat Subtraction                  13  (proven: 0, maybe: 13)
+  Linter Internal Error                       9  (proven: 0, maybe: 9)
+  Integer Division Truncation                 5  (proven: 0, maybe: 5)
+  Unused Quantified Variable                  5  (proven: 0, maybe: 5)
+  0-Indexed Range                             1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                   74
+
+Results:  results/fullrun-date/minif2f@justincasher/results.jsonl
+Run:      results/fullrun-date/minif2f@justincasher/run.json
+Summary:  results/fullrun-date/minif2f@justincasher/summary.json
+Logs:     results/fullrun-date/minif2f@justincasher/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@yangky11/full.jsonl...
+Loaded dataset with 488 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@yangky11/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+.F.F....F.....F......F..................FF.FF.F... [50/488]
+F.............FFF..FF.........F.FF.F...FF..F...... [100/488]
+F.FFFF..................................F......... [150/488]
+..F.......F....F.....F......F.....F....F..F...F..F [200/488]
+.......F............F.FF....F........F.F....F.FF.. [250/488]
+....F.........F.....FF....F...F.F........F....F... [300/488]
+....F.F...........FF........FFF.FF..F..F.F.....FFF [350/488]
+......F......F.FF.....F......F..F.....F...F.F..... [400/488]
+F......................F..F......F..F.......F..FF. [450/488]
+..F.F..........F.....F........TE......
+
+==================================================
+Summary
+==================================================
+Total problems:  488
+  OK:            391
+  Findings:      95
+  Compile Only:  1
+  Timeout:       1
+  Infra Error:   0
+  Compile Flag:  1
+    With Findings:    0
+    Without Findings: 1
+
+Total findings:  135
+  Proven:        6
+  Maybe:         129
+
+Findings by category:
+  0-Indexed Range                            36  (proven: 0, maybe: 36)
+  Potential Division by Zero                 34  (proven: 0, maybe: 34)
+  Truncated Nat Subtraction                  24  (proven: 0, maybe: 24)
+  Analytic Domain Totalization               16  (proven: 0, maybe: 16)
+  Linter Internal Error                      12  (proven: 0, maybe: 12)
+  Integer Division Truncation                12  (proven: 6, maybe: 6)
+  Modulo Edge Case                            1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                  129
+  definitional            6
+
+Results:  results/fullrun-date/minif2f@yangky11/results.jsonl
+Run:      results/fullrun-date/minif2f@yangky11/run.json
+Summary:  results/fullrun-date/minif2f@yangky11/summary.json
+Logs:     results/fullrun-date/minif2f@yangky11/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@harmonic/full.jsonl...
+Loaded dataset with 485 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@harmonic/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+..........F....F..F..................F.F......F... [50/485]
+FF...........F.....F...........F..........T....... [100/485]
+...........F.F..F...................F....F........ [150/485]
+...................................F........F..... [200/485]
+......F.F...F...............F..........F.......... [250/485]
+...F........F............F..F..F...............F.. [300/485]
+F........F.........F..F....F.....................F [350/485]
+F......F.....FF............F..F..F.F..F...FFF...F. [400/485]
+...............FFF.........F.....F................ [450/485]
+........F........FF........T.F..F..
+
+==================================================
+Summary
+==================================================
+Total problems:  485
+  OK:            425
+  Findings:      58
+  Compile Only:  0
+  Timeout:       2
+  Infra Error:   0
+  Compile Flag:  60
+    With Findings:    3
+    Without Findings: 57
+
+Total findings:  74
+  Proven:        0
+  Maybe:         74
+
+Findings by category:
+  Potential Division by Zero                 25  (proven: 0, maybe: 25)
+  Analytic Domain Totalization               16  (proven: 0, maybe: 16)
+  Truncated Nat Subtraction                  13  (proven: 0, maybe: 13)
+  Linter Internal Error                       9  (proven: 0, maybe: 9)
+  Integer Division Truncation                 5  (proven: 0, maybe: 5)
+  Unused Quantified Variable                  5  (proven: 0, maybe: 5)
+  0-Indexed Range                             1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                   74
+
+Results:  results/fullrun-date/minif2f@harmonic/results.jsonl
+Run:      results/fullrun-date/minif2f@harmonic/run.json
+Summary:  results/fullrun-date/minif2f@harmonic/summary.json
+Logs:     results/fullrun-date/minif2f@harmonic/logs/
+
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@yangky11-early-normalized/full.jsonl...
+Loaded dataset with 488 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@yangky11-early-normalized/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+.....F....F....F.......F.F.............F....F.F... [50/488]
+.............FF.F.............................F... [100/488]
+...F...............................F......F......F [150/488]
+.....F....T..T...F.........F...F......F...FF...... [200/488]
+........FF.F...F...F........F..................F.. [250/488]
+.......F................T.....FF......F.........F. [300/488]
+.F......................F..T..F......F.T....F..... [350/488]
+F......F.F......F.TTFF....F..........F....F..F.... [400/488]
+..........FFFF...F.F.......T.T.........F..TF.....F [450/488]
+.............F.....F....F.............
+
+==================================================
+Summary
+==================================================
+Total problems:  488
+  OK:            416
+  Findings:      62
+  Compile Only:  0
+  Timeout:       10
+  Infra Error:   0
+  Compile Flag:  63
+    With Findings:    2
+    Without Findings: 61
+
+Total findings:  79
+  Proven:        13
+  Maybe:         66
+
+Findings by category:
+  Truncated Nat Subtraction                  19  (proven: 0, maybe: 19)
+  Integer Division Truncation                15  (proven: 7, maybe: 8)
+  Potential Division by Zero                 14  (proven: 0, maybe: 14)
+  Linter Internal Error                      10  (proven: 0, maybe: 10)
+  Analytic Domain Totalization                9  (proven: 0, maybe: 9)
+  Counterexample Found                        5  (proven: 5, maybe: 0)
+  0-Indexed Range                             3  (proven: 0, maybe: 3)
+  Unused Quantified Variable                  2  (proven: 0, maybe: 2)
+  Modulo Edge Case                            1  (proven: 0, maybe: 1)
+  Vacuous Theorem                             1  (proven: 1, maybe: 0)
+
+Proved by:
+  none                   66
+  definitional            7
+  decide                  3
+  plausible               2
+  omega                   1
+
+Results:  results/fullrun-date/minif2f@yangky11-early-normalized/results.jsonl
+Run:      results/fullrun-date/minif2f@yangky11-early-normalized/run.json
+Summary:  results/fullrun-date/minif2f@yangky11-early-normalized/summary.json
+Logs:     results/fullrun-date/minif2f@yangky11-early-normalized/logs/
+
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@v2s/full.jsonl...
+Loaded dataset with 488 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@v2s/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+...FFFF..FF.F.........F..F............FFF...F..... [50/488]
+...FFF..F..F...F...................T..FFFF..F...F. [100/488]
+FFF..F.F.....FF.F......F..FFF....FFF.......FF..... [150/488]
+...........F....F..FFF.FF........FE.....F..F..F... [200/488]
+F.....F..F........FFF.F.F.....F.....F.......F..... [250/488]
+....F.F.FFF......F.F..F.......F..F.F..F.F.F.F..... [300/488]
+..F....FF.F.F.......F......F......F............... [350/488]
+..............F..F......F.......F..F.......F...... [400/488]
+.....F.....F..FFF.F..F...F...FF.F...FF.F..F..F.... [450/488]
+...F...F.F...FF.......F.F..F........F.
+
+==================================================
+Summary
+==================================================
+Total problems:  488
+  OK:            368
+  Findings:      118
+  Compile Only:  1
+  Timeout:       1
+  Infra Error:   0
+  Compile Flag:  9
+    With Findings:    1
+    Without Findings: 8
+
+Total findings:  181
+  Proven:        8
+  Maybe:         173
+
+Findings by category:
+  Potential Division by Zero                 45  (proven: 0, maybe: 45)
+  0-Indexed Range                            37  (proven: 0, maybe: 37)
+  Truncated Nat Subtraction                  29  (proven: 0, maybe: 29)
+  Analytic Domain Totalization               28  (proven: 0, maybe: 28)
+  Integer Division Truncation                15  (proven: 5, maybe: 10)
+  Unused Quantified Variable                 13  (proven: 0, maybe: 13)
+  Linter Internal Error                      10  (proven: 0, maybe: 10)
+  Counterexample Found                        3  (proven: 3, maybe: 0)
+  Modulo Edge Case                            1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                  173
+  definitional            5
+  decide                  3
+
+Results:  results/fullrun-date/minif2f@v2s/results.jsonl
+Run:      results/fullrun-date/minif2f@v2s/run.json
+Summary:  results/fullrun-date/minif2f@v2s/summary.json
+Logs:     results/fullrun-date/minif2f@v2s/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/minif2f@v2c/full.jsonl...
+Loaded dataset with 488 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/minif2f@v2c/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+...FFFF..FF.F.........F..F............FFF...F..... [50/488]
+...FFF..F..F...F...................T..FFFF..F...F. [100/488]
+F.F..F.F.....FF.F......F..FFF....FFF.......FF..... [150/488]
+...........F....F..FFF.FF........FE.....F..F..F... [200/488]
+F.....F..F........FFF.F.F.....F.....F.......F..... [250/488]
+....F.F.FFF......F.F..F.......F..F.F..F.F.F.F..... [300/488]
+..F....FF.F.F.......F...F..F......F............... [350/488]
+..............F..F......F.......F..F.......F...... [400/488]
+.....F.....F..FFF.F..F...F...FF.F...FF.F..FF.F.... [450/488]
+...F...F.F...FF.......F.F..F........F.
+
+==================================================
+Summary
+==================================================
+Total problems:  488
+  OK:            367
+  Findings:      119
+  Compile Only:  1
+  Timeout:       1
+  Infra Error:   0
+  Compile Flag:  8
+    With Findings:    1
+    Without Findings: 7
+
+Total findings:  193
+  Proven:        8
+  Maybe:         185
+
+Findings by category:
+  Potential Division by Zero                 45  (proven: 0, maybe: 45)
+  0-Indexed Range                            39  (proven: 0, maybe: 39)
+  Analytic Domain Totalization               31  (proven: 0, maybe: 31)
+  Truncated Nat Subtraction                  28  (proven: 0, maybe: 28)
+  Integer Division Truncation                20  (proven: 5, maybe: 15)
+  Unused Quantified Variable                 17  (proven: 0, maybe: 17)
+  Linter Internal Error                       9  (proven: 0, maybe: 9)
+  Counterexample Found                        3  (proven: 3, maybe: 0)
+  Modulo Edge Case                            1  (proven: 0, maybe: 1)
+
+Proved by:
+  none                  185
+  definitional            5
+  decide                  3
+
+Results:  results/fullrun-date/minif2f@v2c/results.jsonl
+Run:      results/fullrun-date/minif2f@v2c/run.json
+Summary:  results/fullrun-date/minif2f@v2c/summary.json
+Logs:     results/fullrun-date/minif2f@v2c/logs/
+INFO: Detected schema: lean_code (from full.jsonl)
+Loading problems from /home/user/bench-inputs/fullrun-date/formalmath@all/full.jsonl...
+Loaded dataset with 5560 entries
+Workspace: .
+Toolchain: leanprover/lean4:v4.28.0
+Output: results/fullrun-date/formalmath@all/results.jsonl
+
+Running linter [subprocess (10 worker(s))]...
+........FF.....FFF....F.F..FFF..F..FF..F..F....... [50/5560]
+.F.FF..F.F..F...FFF.F..F.F.FFTFF...F....F...F..F.F [100/5560]
+..E.FTF.F.....F.F..F..F...F.FFF.F.F..F....F.FE...F [150/5560]
+...F..E.FF......F..F...F.F.F.F.FF.F...F.F.......F. [200/5560]
+F........F.FF.F..F.........F.F.F..F...........F..F [250/5560]
+...FFFFF.FFF..FFF....F..F...F.F......F.FF.F..F.... [300/5560]
+F...F...F....F..F....FF.F.FT..F.FFF.F...F.F.F..... [350/5560]
+FF...FFFFF..F..F.F..F.F.F.FFF..F..FF.FF...FF.F.F.. [400/5560]
+F......FF.....FFF.F..F........FFFF.F....FF.F....F. [450/5560]
+FFF...F.FFF..FFF...F.F..FF..F.FF.FF.F.F.....F...F. [500/5560]
+...F....F.F..FF..F.....F..FF..F..F.F.FF..F.....F.. [550/5560]
+FF.FFF....FF...FF.....F..FFFF.FF..F.F.F.FF..FFF... [600/5560]
+...F.F....F..........................FF..F....F.F. [650/5560]
+.FFFFFF.FFF.......F....F.F.........F.......F..FFFF [700/5560]
+F.F..FF..F...F...F....F.F..FF..F.F......F..F...FFF [750/5560]
+...F.FF...F...F.F..F.FF.F..FFFFFF.F..FFF...F....FF [800/5560]
+.F.....FF........F....F..F.F...FF.........F..T.... [850/5560]
+.F......FF.F.F..FF.......T..F......F.....FF.F..... [900/5560]
+...FFFF.F....F...FF..........FF......FF...F.F..F.. [950/5560]
+.F..F..F....F.F..F.FF.FF.F...........F......F..FF. [1000/5560]
+..F....F.......FFF..FFFFF..F.....FF.FF..F...F.F.F. [1050/5560]
+FF..FF............FF..F....F....F......F.F...FFF.. [1100/5560]
+.FF......F.FF.....F...........F.FFF.......F...F... [1150/5560]
+F.FFF.F.F.....F..FF..F....F......FF....F.F..F..F.. [1200/5560]
+.F.F.F...F....F.......FF.FF......F....FF.FF..F.... [1250/5560]
+F.....F....F.......FF....FF.FFF...FF..F.F...FF..F. [1300/5560]
+..F.F....FF......FF...FF.FF....FFF.F.....F..F....F [1350/5560]
+..F..FFF.......FF......F....FFFF...F.F....F.....F. [1400/5560]
+..F......F.F.F......FF.F...F..FF....F.F.F.FFF.F... [1450/5560]
+.....F.FFF..FFF.F..F.F.F..F..F...F..TF.....FF.F.F. [1500/5560]
+..F..F.....F...FF.FF......F....F..F..F..FF....F... [1550/5560]
+....F...FTFF.F.......F........F........F.......F.. [1600/5560]
+..F..F..F.....F............F.....F..F.F..F........ [1650/5560]
+F.....FT....T..F...F...........F....F........F..F. [1700/5560]
+.....F...F..F..........F.........FF.F.F......F.... [1750/5560]
+..F.F.FF.F...F.FF.F......FF.F...F...FF..F.....F... [1800/5560]
+.F.F.FF.F.F.F.F.F......F.......FFF..FF.FF.FFF.F... [1850/5560]
+..F...FF..FF...F..F.F......F.F.....FFF.F....F..... [1900/5560]
+F.FF.....FFT...F.F.FFF..F....FFF.F..F............. [1950/5560]
+.F......FFF........F.....F..F.FF...F.F......FFF... [2000/5560]
+..F..F............FFFF...F...F.F.F..F..........FFF [2050/5560]
+F.FFF.F..F.....F.FFF...F.F...F....FF...F....FT.F.F [2100/5560]
+FFF.FF.F.F..FFF.....F.F.FFFF...FF....F.....F..F..F [2150/5560]
+..FF.FF...F.......F..F....T....F..........FF....FF [2200/5560]
+F..FF.......F..FF.T...........F.FF....F.....F....F [2250/5560]
+F...........F....FF...F.FF.FFF.FF.FF.F..F...FF.... [2300/5560]
+..FF.F.F..F..F.F..F....FF...............F.......F. [2350/5560]
+...F...FFF.F...F...FF.F....F..F....F.F.FF.F..FFF.. [2400/5560]
+.FF...F..FF..F....F.....F.F.......FF..........FF.. [2450/5560]
+....FF.......F.F.F....F.F..F.F..F...FF....F.FF.F.. [2500/5560]
+..F..FFFF.FF.F..F.F.FF.....F...FFF.FFF.FFF........ [2550/5560]
+..F..FF..F..FF..F..F...F..FF.T..FFF.F...F.F..F.FFF [2600/5560]
+.........F..F.......FFFF....FFF...F.FFFFFF...FF... [2650/5560]
+FFF........F...FFFFFFF...F...F..F.FT.FFF.F.F.FF... [2700/5560]
+...FFF..FF.FF...F....FFF.F..F.FFFFF..........FFF.F [2750/5560]
+.F.F.F....F.FF.F...F.FFF...FFFF...TF.F..FF.F.F.FFF [2800/5560]
+...FFFF.....F..F.F.F..F.F..........FF..FF.F.FFFF.F [2850/5560]
+................F..F...............FFF.....F..FFFF [2900/5560]
+F..F.....F......F.F...F...F..F...F...............F [2950/5560]
+..F.F.F...F..FF.F...F..F.F.....FF.......F...F.F.F. [3000/5560]
+..F.F.F...F.FFFF..F.FFF.F.F.F.FF..FFFFFFFF..F..FFF [3050/5560]
+..F.F.F...F..FF...F.FFFF.FF..FF...FFF.F..FF.F.F.FF [3100/5560]
+FFF.F.FFF..F.......F.F....FF......F........F.FF..F [3150/5560]
+.F....F.......F.FF.F..F.FF.FFFF..F...FF....F..FF.. [3200/5560]
+......FF.F.F..F.FFFFTF.F.F..FFF....F..FF.FTF...F.. [3250/5560]
+...F.F..F..F.FFF....F....F..F..F...F...F.F...FF.F. [3300/5560]
+.FF...F....F.F.F....F.....FF.....F......FF.FF.FF.. [3350/5560]
+.........F..F.......F.FFF.FF....FFFF.......F.F..FF [3400/5560]
+.FFF.F.F.....FF.FF...FF.F.FF...F.FF...F........... [3450/5560]
+FF.......F.FF.......FF.....FFFF.......F..F...F..F. [3500/5560]
+..F..FFF............F.....F.F....F....F.F....F..FF [3550/5560]
+F....F.....F...............F....FF...........F..F. [3600/5560]
+F....F.F.F..F......F....FF..F....F.F..F...FF..F... [3650/5560]
+F.F.FF....F...F.....F.F.F.F..F...F.FF.......FFF..F [3700/5560]
+....F..FFF.FFF..FF........F..FFF.F.F......FFFF.F.F [3750/5560]
+...F.F.F..F....F....F.F..F...FF.F.FF...T...F..F.FF [3800/5560]
+F....F.......FF.FF.F...F.FFF..FF..FF.FFF..F...F... [3850/5560]
+........F..F...F.F...F.FFF.FF.T........F...FF.F... [3900/5560]
+..FF.F....F.F..F........F..F...FFF..F..FFFFF..FF.F [3950/5560]
+FFFF.F..FFF.F..FF...FFFFF.F.FF....F.FFF..FF..F...F [4000/5560]
+FF...F.F.F......F.FFF...F.FF.....FF...FF........FF [4050/5560]
+.FF...F..FFF..F..FF.WARNING: Import-bundle cache compile failed for AtpCache.Imports_519bc94aab6ef8b9: /home/user/repo/.atp_import_cache/AtpCache/Imports_519bc94aab6ef8b9.lean:1:0: error: object file '/home/user/repo/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib/Algebra/BigOperators/Ring.olean' of module Mathlib.Algebra.BigOperators.Ring does not exist
+
+FF..FFFFEF..F.FFF...F.F...F..F [4100/5560]
+F.............F...F..FFFF.FF....F...F.F..F........ [4150/5560]
+.....F.....FF.....FF.......F.....F...F.....F...F.. [4200/5560]
+....F.................FFF.......F..F........F.F... [4250/5560]
+.F.F.....FFF...F.F.F.F..........F.F.TFFF..F...F... [4300/5560]
+..F.......F....F.FFFF.F....F...F..F..F............ [4350/5560]
+...F.....F...F.F..FF.F.FF....F.....FF..F....FF.FF. [4400/5560]
+....T..FF..F....F..F.F.F.F...F..F...F..........F.F [4450/5560]
+.E.......F.......F.FF.F...F..F..FFFF.FFFFF....FFF. [4500/5560]
+F....F....F...F.F.......................F.FF..FWARNING: Import-bundle cache compile failed for AtpCache.Imports_bf61d8e30b772b2f: /home/user/repo/.atp_import_cache/AtpCache/Imports_bf61d8e30b772b2f.lean:1:0: error: object file '/home/user/repo/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib/Algebra/BigOperators/Group/Finset.olean' of module Mathlib.Algebra.BigOperators.Group.Finset does not exist
+
+.F. [4550/5560]
+.F..FF....FEF.F..F...F..FFF.........F...F..F..F... [4600/5560]
+F..........F..FFFFF.F..FF..........FF........FF..F [4650/5560]
+.F..F.....FFT.....F...................F......F..F. [4700/5560]
+F...F....FT..F............FFFFF.F.F....F..F..F..FF [4750/5560]
+F.F..FF..F.....F...F.FFF.F....FF....F......F..F... [4800/5560]
+F..F...F....FF..F.F..F..F.........FF......F......F [4850/5560]
+.F.......F.FF...F..F.F........F.........F..F..F.F. [4900/5560]
+.F.F...F...F...F...FF..F....F.F.......F.F....FFFF. [4950/5560]
+F.FF.TF...F....F....F...F.F.....F..FF..FFFF..FF.FF [5000/5560]
+.FFF....F.F...F...F.F.F......F.FF.F...FF..FF..F..F [5050/5560]
+.F.....F...F.F.WARNING: Import-bundle cache compile failed for AtpCache.Imports_8b5fcc96caf568ae: /home/user/repo/.atp_import_cache/AtpCache/Imports_8b5fcc96caf568ae.lean:1:0: error: object file '/home/user/repo/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib/Algebra/BigOperators/Group/Finset.olean' of module Mathlib.Algebra.BigOperators.Group.Finset does not exist
+
+FF...F...E.....F.....FF...F........ [5100/5560]
+...F..FF.....F..F..FF.......F...FEF.F.....F..F.F.. [5150/5560]
+.....FF.F.....FF........F.....FF......F...FF....F. [5200/5560]
+....FFF.F.FFFF..F.F....FF.......F.F...FT.....F.F.F [5250/5560]
+..F...FFF....F..FFF.F.FF...FF.....F.F..FF...F.F.F. [5300/5560]
+........F....F..F.....F.FFFF..F...FF......F.F..... [5350/5560]
+..F..........FF.....F..F.FF...F............FFF.FF. [5400/5560]
+.F.....F.......F.F.............F...FF....F.FF....F [5450/5560]
+..........F.FF.......F...............F...FF...FF.. [5500/5560]
+F.....FFFF.F.FF.F...F..FF..F......F...F......F.FFF [5550/5560]
+.FF...FF..
+
+==================================================
+Summary
+==================================================
+Total problems:  5560
+  OK:            3729
+  Findings:      1797
+  Compile Only:  8
+  Timeout:       26
+  Infra Error:   0
+  Compile Flag:  288
+    With Findings:    61
+    Without Findings: 227
+
+Total findings:  3250
+  Proven:        141
+  Maybe:         3109
+
+Findings by category:
+  Potential Division by Zero               1127  (proven: 0, maybe: 1127)
+  Truncated Nat Subtraction                 582  (proven: 1, maybe: 581)
+  Integer Division Truncation               423  (proven: 66, maybe: 357)
+  Analytic Domain Totalization              351  (proven: 0, maybe: 351)
+  Unused Quantified Variable                318  (proven: 0, maybe: 318)
+  0-Indexed Range                           188  (proven: 0, maybe: 188)
+  Linter Internal Error                     157  (proven: 0, maybe: 157)
+  Counterexample Found                       55  (proven: 55, maybe: 0)
+  Modulo Edge Case                           48  (proven: 18, maybe: 30)
+  Vacuous Theorem                             1  (proven: 1, maybe: 0)
+
+Proved by:
+  none                 3109
+  definitional           66
+  decide                 45
+  omega                  20
+  plausible              10
+
+Results:  results/fullrun-date/formalmath@all/results.jsonl
+Run:      results/fullrun-date/formalmath@all/run.json
+Summary:  results/fullrun-date/formalmath@all/summary.json
+Logs:     results/fullrun-date/formalmath@all/logs/

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "minif2f@yangky11:2026-03-30T21:02:57.654233+00:00",
+  "dataset": "full",
+  "toolchain": "leanprover/lean4:v4.28.0",
+  "total_problems": 488,
+  "status_counts": {
+    "ok": 391,
+    "findings": 95,
+    "compile_error": 1,
+    "timeout": 1,
+    "infra_error": 0
+  },
+  "compile_error_counts": {
+    "total": 1,
+    "with_findings": 0,
+    "without_findings": 1,
+    "compile_only": 1
+  },
+  "total_findings": 135,
+  "confidence_counts": {
+    "proven": 6,
+    "maybe": 129
+  },
+  "findings_by_category": {
+    "0-Indexed Range": {
+      "total": 36,
+      "proven": 0,
+      "maybe": 36
+    },
+    "Potential Division by Zero": {
+      "total": 34,
+      "proven": 0,
+      "maybe": 34
+    },
+    "Truncated Nat Subtraction": {
+      "total": 24,
+      "proven": 0,
+      "maybe": 24
+    },
+    "Analytic Domain Totalization": {
+      "total": 16,
+      "proven": 0,
+      "maybe": 16
+    },
+    "Linter Internal Error": {
+      "total": 12,
+      "proven": 0,
+      "maybe": 12
+    },
+    "Integer Division Truncation": {
+      "total": 12,
+      "proven": 6,
+      "maybe": 6
+    },
+    "Modulo Edge Case": {
+      "total": 1,
+      "proven": 0,
+      "maybe": 1
+    }
+  },
+  "proved_by_counts": {
+    "none": 129,
+    "definitional": 6
+  }
+}
