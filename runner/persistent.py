@@ -165,7 +165,10 @@ class LeanRepl:
                 raise RuntimeError(_message_text(msgs) or "Failed to import AtpLinter")
             env = resp.get("env")
             if not isinstance(env, int):
-                raise RuntimeError(f"REPL did not return an environment: {json.dumps(resp)[:1000]}")
+                # RuntimeError is correct here: this is a REPL protocol
+                # violation, not a client type error. TRY004 false positive.
+                raise RuntimeError(  # noqa: TRY004
+                    f"REPL did not return an environment: {json.dumps(resp)[:1000]}")
             self._env_cache[tuple()] = env
         except Exception:
             await self.stop()
@@ -394,7 +397,9 @@ class LeanRepl:
         compile_error_message = _message_text(messages)[:4000] if compile_error else None
 
         findings, parse_errors = parse_lint_output(full_output)
-        done, done_meta = has_done_sentinel(full_output)
+        done, done_meta, done_parse_err = has_done_sentinel(full_output)
+        if done_parse_err is not None:
+            parse_errors.append(done_parse_err)
 
         truncation_error = None
         if done and done_meta and "findings" in done_meta:
@@ -674,26 +679,35 @@ async def run_batch(
                         on_result(r)
                     next_emit += 1
 
-            while not exhausted or in_flight:
-                # Fill window
-                while not exhausted and len(in_flight) < window:
-                    try:
-                        problem = next(problem_iter)
-                    except StopIteration:
-                        exhausted = True
-                        break
-                    task = asyncio.create_task(_process(feed_idx, problem))
-                    in_flight.add(task)
-                    feed_idx += 1
+            try:
+                while not exhausted or in_flight:
+                    # Fill window
+                    while not exhausted and len(in_flight) < window:
+                        try:
+                            problem = next(problem_iter)
+                        except StopIteration:
+                            exhausted = True
+                            break
+                        task = asyncio.create_task(_process(feed_idx, problem))
+                        in_flight.add(task)
+                        feed_idx += 1
 
-                # Wait for at least one to finish
+                    # Wait for at least one to finish
+                    if in_flight:
+                        done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+                        for task in done:
+                            task.result()  # propagate exceptions
+                        _emit()
+
+                _emit()  # flush remaining
+            except BaseException:
+                # Cancel any in-flight tasks so their REPL/subprocess
+                # calls don't leak past the error
+                for task in in_flight:
+                    task.cancel()
                 if in_flight:
-                    done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        task.result()  # propagate exceptions
-                    _emit()
-
-            _emit()  # flush remaining
+                    await asyncio.gather(*in_flight, return_exceptions=True)
+                raise
     finally:
         await pool.stop()
 

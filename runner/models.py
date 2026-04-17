@@ -39,6 +39,7 @@ class Finding:
     suggestion: str | None = None
     confidence: str = "maybe"
     proved_by: str | None = None
+    taxonomy_category: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> Finding:
@@ -50,6 +51,7 @@ class Finding:
             suggestion=d.get("suggestion"),
             confidence=d.get("confidence", "maybe"),
             proved_by=d.get("provedBy"),
+            taxonomy_category=d.get("taxonomyCategory"),
         )
 
 
@@ -99,6 +101,7 @@ class LintResult:
                     "suggestion": f.suggestion,
                     "confidence": f.confidence,
                     "provedBy": f.proved_by,
+                    "taxonomyCategory": f.taxonomy_category,
                 }
                 for f in self.findings
             ],
@@ -147,15 +150,21 @@ def parse_lint_output(text: str) -> tuple[list[Finding], list[str]]:
     return findings, parse_errors
 
 
-def has_done_sentinel(text: str) -> tuple[bool, dict | None]:
-    """Check for ATP_DONE sentinel and parse its metadata."""
+def has_done_sentinel(text: str) -> tuple[bool, dict | None, str | None]:
+    """Check for ATP_DONE sentinel and parse its metadata.
+
+    Returns (done, metadata, parse_error). A malformed JSON payload is
+    surfaced as parse_error so the caller can log it rather than silently
+    accepting done=True with no metadata.
+    """
     for line in text.splitlines():
         if line.startswith(SENTINEL_DONE):
             rest = line[len(SENTINEL_DONE):]
             if rest.startswith(":"):
+                payload = rest[1:]
                 try:
-                    return True, json.loads(rest[1:])
-                except json.JSONDecodeError:
-                    return True, None
-            return True, None
-    return False, None
+                    return True, json.loads(payload), None
+                except json.JSONDecodeError as e:
+                    return True, None, f"Malformed ATP_DONE JSON: {e} in: {payload[:100]}"
+            return True, None, None
+    return False, None, None

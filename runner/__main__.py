@@ -5,7 +5,10 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
+import signal
+import subprocess
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -203,7 +206,6 @@ def _count_json_entries(path: Path) -> int | None:
 
 def _open_dataset_stream(args, header: str | None) -> tuple[Iterator[Problem | ParseError], str, int | None]:
     fmt = args.format
-    source = args.dataset
 
     if fmt == "jsonl":
         path = Path(args.dataset)
@@ -268,13 +270,25 @@ class _ResultTracker:
         result.dataset = self.dataset_name
         result.run_id = self.run_id
         self.processed += 1
+
+        # The Lean side emits per-declaration infrastructure failures (grind
+        # crashes, maxRecDepth, etc.) as findings with category "Linter
+        # Internal Error". These are not semantic findings — treat them as
+        # infra errors so they don't inflate the real finding counts.
+        internal_error_findings = [f for f in result.findings
+                                   if f.category == "Linter Internal Error"]
+        semantic_findings = [f for f in result.findings
+                             if f.category != "Linter Internal Error"]
+        if internal_error_findings and result.status == "findings" and not semantic_findings:
+            # Promote to infra_error when the ONLY findings are internal errors
+            result.status = "infra_error"
         self.stats[result.status] = self.stats.get(result.status, 0) + 1
         if result.compile_error:
             self.compile_errors += 1
-            if result.findings:
+            if semantic_findings:
                 self.compile_errors_with_findings += 1
 
-        for f in result.findings:
+        for f in semantic_findings:
             self.total_findings += 1
             if f.category not in self.by_category:
                 self.by_category[f.category] = {"total": 0, "proven": 0, "maybe": 0}
@@ -413,6 +427,49 @@ def _iter_runnable_problems(
 # Main
 # ---------------------------------------------------------------------------
 
+def _kill_surviving_lean_children() -> None:
+    """Best-effort kill of any surviving lean/lake subprocesses we spawned.
+
+    Subprocesses are created with start_new_session=True, which puts them
+    in their own session/process group so they don't receive SIGINT via
+    the tty. They remain our direct children by ppid, so a ps-based scan
+    finds them reliably.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,comm="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+
+    our_pid = os.getpid()
+    victims: list[int] = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        comm = parts[2]
+        if ppid == our_pid and ("lean" in comm or "lake" in comm):
+            victims.append(pid)
+
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    if victims:
+        print(f"[interrupted] killed {len(victims)} surviving Lean subprocess(es)",
+              file=sys.stderr)
+
+
 def main():
     args = _build_parser().parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -497,18 +554,30 @@ def main():
         )
         problems = _iter_runnable_problems(items, tracker, dataset_source, toolchain, resume_state)
 
-        if args.backend == "persistent":
-            asyncio.run(run_batch_persistent(
-                workspace=args.workspace, problems=problems, toolchain=toolchain,
-                timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
-                collect_results=False,
-            ))
-        else:
-            asyncio.run(run_batch_subprocess(
-                workspace=args.workspace, problems=problems, toolchain=toolchain,
-                timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
-                collect_results=False,
-            ))
+        try:
+            if args.backend == "persistent":
+                asyncio.run(run_batch_persistent(
+                    workspace=args.workspace, problems=problems, toolchain=toolchain,
+                    timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
+                    collect_results=False,
+                ))
+            else:
+                asyncio.run(run_batch_subprocess(
+                    workspace=args.workspace, problems=problems, toolchain=toolchain,
+                    timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
+                    collect_results=False,
+                ))
+        except KeyboardInterrupt:
+            # On Ctrl-C, asyncio.run cancels tasks which cancels run_batch's
+            # in-flight windows (see the BaseException handlers in
+            # executor/persistent run_batch). That reaches the individual
+            # lint_problem calls, which kill their subprocesses in finally
+            # blocks. Still: some children spawned with start_new_session
+            # may outlive their parent; best-effort kill-on-exit.
+            print("\n[interrupted] cancelling; killing any surviving Lean children...",
+                  file=sys.stderr)
+            _kill_surviving_lean_children()
+            raise
 
     # Summary
     summary = tracker.summary_dict(dataset_source, toolchain)

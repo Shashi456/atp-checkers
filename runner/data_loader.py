@@ -219,7 +219,7 @@ def iter_jsonl(
             except json.JSONDecodeError as e:
                 err = ParseError(line_num, f"Invalid JSON: {e}", line[:200])
                 if on_error == "raise":
-                    raise ValueError(f"{path}:{line_num}: {err.error}")
+                    raise ValueError(f"{path}:{line_num}: {err.error}") from e
                 yield err
                 continue
 
@@ -228,7 +228,7 @@ def iter_jsonl(
             except ValueError as e:
                 err = ParseError(line_num, str(e), line[:200])
                 if on_error == "raise":
-                    raise ValueError(f"{path}:{line_num}: {err.error}")
+                    raise ValueError(f"{path}:{line_num}: {err.error}") from e
                 yield err
                 continue
 
@@ -412,11 +412,11 @@ def iter_hf(
     """Iterate over a HuggingFace dataset split, yielding Problem or ParseError in row order."""
     try:
         import datasets as ds_lib
-    except ImportError:
-        raise ValueError(
+    except ImportError as e:
+        raise ModuleNotFoundError(
             "HuggingFace datasets library required for --format hf. "
             "Install with: pip install datasets"
-        )
+        ) from e
 
     if source is None:
         source = repo_id.replace("/", "_")

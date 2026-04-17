@@ -408,7 +408,9 @@ async def lint_problem(
 
         # Parse linter output
         findings, parse_errors = parse_lint_output(stdout_str)
-        done, done_meta = has_done_sentinel(stdout_str)
+        done, done_meta, done_parse_err = has_done_sentinel(stdout_str)
+        if done_parse_err is not None:
+            parse_errors.append(done_parse_err)
         compile_error = returncode > 0
         compile_error_message = None
         if compile_error:
@@ -614,22 +616,30 @@ async def run_batch(
                 on_result(result)
             next_emit += 1
 
-    while not exhausted or in_flight:
-        while not exhausted and len(in_flight) < window:
-            try:
-                problem = next(problem_iter)
-            except StopIteration:
-                exhausted = True
-                break
-            task = asyncio.create_task(process_one(next_idx, problem))
-            in_flight.add(task)
-            next_idx += 1
+    try:
+        while not exhausted or in_flight:
+            while not exhausted and len(in_flight) < window:
+                try:
+                    problem = next(problem_iter)
+                except StopIteration:
+                    exhausted = True
+                    break
+                task = asyncio.create_task(process_one(next_idx, problem))
+                in_flight.add(task)
+                next_idx += 1
 
+            if in_flight:
+                done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+                emit_ready()
+
+        emit_ready()
+        return results
+    except BaseException:
+        # Cancel any in-flight tasks so their subprocesses don't leak
+        for task in in_flight:
+            task.cancel()
         if in_flight:
-            done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
-            emit_ready()
-
-    emit_ready()
-    return results
+            await asyncio.gather(*in_flight, return_exceptions=True)
+        raise
