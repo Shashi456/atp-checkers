@@ -7,10 +7,10 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
 from datetime import datetime, timezone
-from typing import Iterable, Iterator
+from pathlib import Path
 
 from .data_loader import (
     count_jsonl_entries,
@@ -20,11 +20,16 @@ from .data_loader import (
     iter_jsonl,
     iter_lean_dir,
 )
-from .persistent import run_batch as run_batch_persistent
 from .executor import run_batch as run_batch_subprocess
-from .models import DEFAULT_TIMEOUT, RESULT_SCHEMA_VERSION
-from .models import ParseError, LintResult, Problem, Provenance
-
+from .models import (
+    DEFAULT_TIMEOUT,
+    RESULT_SCHEMA_VERSION,
+    LintResult,
+    ParseError,
+    Problem,
+    Provenance,
+)
+from .persistent import run_batch as run_batch_persistent
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -153,7 +158,7 @@ def _load_existing_state(results_file: Path, toolchain: str) -> _ResumeState:
         return state
     print(f"Loading existing results from {results_file}...")
     latest_by_key: dict[str, dict] = {}
-    with open(results_file, "r", encoding="utf-8") as f:
+    with open(results_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -189,7 +194,7 @@ def _load_existing_state(results_file: Path, toolchain: str) -> _ResumeState:
 
 def _count_json_entries(path: Path) -> int | None:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         return 1

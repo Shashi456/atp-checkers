@@ -14,20 +14,23 @@ import json
 import logging
 import os
 import re
-import signal
 import shutil
+import signal
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Iterable, Optional
 
 from .models import (
-    Problem, LintResult, Provenance,
-    parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT,
+    DEFAULT_TIMEOUT,
+    LintResult,
+    Problem,
+    has_done_sentinel,
+    make_provenance,
+    parse_lint_output,
 )
 from .preamble import normalize_imports, partition_preamble, render_problem_source, split_preamble
-
 
 log = logging.getLogger(__name__)
 
@@ -153,7 +156,7 @@ def _ensure_import_bundle(
                 env=lean_env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                text=True, check=False,
             )
             if proc.returncode != 0:
                 log.warning(
@@ -305,7 +308,7 @@ async def lint_problem(
         )
     try:
         problem_file.write_text(render_problem_source(problem.lean_code, import_module=import_module), encoding="utf-8")
-    except (OSError, IOError) as e:
+    except OSError as e:
         duration_ms = int((time.monotonic() - start_time) * 1000)
         return LintResult(
             problem_id=problem.id,
@@ -458,7 +461,7 @@ async def lint_problem(
                 provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
-        elif returncode > 0:
+        if returncode > 0:
             if done:
                 return LintResult(
                     problem_id=problem.id,
@@ -484,7 +487,7 @@ async def lint_problem(
                 compile_error_message=compile_error_message,
                 metadata=problem.metadata,
             )
-        elif not done:
+        if not done:
             combined_output = f"Linter did not complete (no ATP_DONE sentinel)\n\n=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:1000]}"
             return LintResult(
                 problem_id=problem.id,
@@ -498,19 +501,18 @@ async def lint_problem(
                 compile_error_message=compile_error_message,
                 metadata=problem.metadata,
             )
-        else:
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="findings" if findings else "ok",
-                findings=findings,
-                error_message=None,
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                compile_error=compile_error,
-                compile_error_message=compile_error_message,
-                metadata=problem.metadata,
-            )
+        return LintResult(
+            problem_id=problem.id,
+            source=problem.source,
+            status="findings" if findings else "ok",
+            findings=findings,
+            error_message=None,
+            duration_ms=duration_ms,
+            provenance=make_provenance(toolchain),
+            compile_error=compile_error,
+            compile_error_message=compile_error_message,
+            metadata=problem.metadata,
+        )
 
     finally:
         # Cleanup temp file and build artifacts
@@ -537,7 +539,7 @@ async def run_batch(
     problems: Iterable[Problem],
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
-    on_result: Optional[Callable] = None,
+    on_result: Callable | None = None,
     workers: int = 1,
     collect_results: bool = True,
 ) -> list[LintResult]:
@@ -576,59 +578,58 @@ async def run_batch(
             if on_result:
                 on_result(result)
         return results
-    else:
-        # Parallel execution with a bounded in-flight window, streaming results in dataset order.
-        # Keep the in-flight count aligned with the requested worker count so `-j N`
-        # does not fan out into many more concurrent Lean processes than expected.
-        window = max(1, workers)
-        resolved = await _resolve_direct_lean_async(workspace)
-        lean_cmd = resolved[0] if resolved is not None else None
-        lean_env = resolved[1] if resolved is not None else None
-        result_slots: dict[int, LintResult] = {}
-        next_emit = 0
-        results: list[LintResult] = []
-        in_flight: set[asyncio.Task] = set()
-        problem_iter = iter(problems)
-        next_idx = 0
-        exhausted = False
+    # Parallel execution with a bounded in-flight window, streaming results in dataset order.
+    # Keep the in-flight count aligned with the requested worker count so `-j N`
+    # does not fan out into many more concurrent Lean processes than expected.
+    window = max(1, workers)
+    resolved = await _resolve_direct_lean_async(workspace)
+    lean_cmd = resolved[0] if resolved is not None else None
+    lean_env = resolved[1] if resolved is not None else None
+    result_slots: dict[int, LintResult] = {}
+    next_emit = 0
+    results: list[LintResult] = []
+    in_flight: set[asyncio.Task] = set()
+    problem_iter = iter(problems)
+    next_idx = 0
+    exhausted = False
 
-        async def process_one(idx: int, problem: Problem):
-            result_slots[idx] = await lint_problem(
-                workspace,
-                problem,
-                toolchain,
-                timeout,
-                row_index=idx,
-                lean_cmd=lean_cmd,
-                lean_env=lean_env,
-            )
+    async def process_one(idx: int, problem: Problem):
+        result_slots[idx] = await lint_problem(
+            workspace,
+            problem,
+            toolchain,
+            timeout,
+            row_index=idx,
+            lean_cmd=lean_cmd,
+            lean_env=lean_env,
+        )
 
-        def emit_ready() -> None:
-            nonlocal next_emit
-            while next_emit in result_slots:
-                result = result_slots.pop(next_emit)
-                if collect_results:
-                    results.append(result)
-                if on_result:
-                    on_result(result)
-                next_emit += 1
+    def emit_ready() -> None:
+        nonlocal next_emit
+        while next_emit in result_slots:
+            result = result_slots.pop(next_emit)
+            if collect_results:
+                results.append(result)
+            if on_result:
+                on_result(result)
+            next_emit += 1
 
-        while not exhausted or in_flight:
-            while not exhausted and len(in_flight) < window:
-                try:
-                    problem = next(problem_iter)
-                except StopIteration:
-                    exhausted = True
-                    break
-                task = asyncio.create_task(process_one(next_idx, problem))
-                in_flight.add(task)
-                next_idx += 1
+    while not exhausted or in_flight:
+        while not exhausted and len(in_flight) < window:
+            try:
+                problem = next(problem_iter)
+            except StopIteration:
+                exhausted = True
+                break
+            task = asyncio.create_task(process_one(next_idx, problem))
+            in_flight.add(task)
+            next_idx += 1
 
-            if in_flight:
-                done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    task.result()
-                emit_ready()
+        if in_flight:
+            done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+            emit_ready()
 
-        emit_ready()
-        return results
+    emit_ready()
+    return results

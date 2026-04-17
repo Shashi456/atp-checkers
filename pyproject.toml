@@ -1,0 +1,64 @@
+[project]
+name = "atp-checkers-runner"
+version = "0.1.0"
+description = "Python driver for the atp-checkers Lean linter"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+    ".venv",
+    ".lake",
+    "worktrees",
+    "local/cache",
+    "datasets/generated",
+    "results",
+]
+
+[tool.ruff.lint]
+# Start with a curated rule set — not everything under the sun, but more than default.
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports, undefined names, ...)
+    "I",    # isort (import ordering)
+    "B",    # flake8-bugbear (likely bugs)
+    "UP",   # pyupgrade (modernize syntax)
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "N",    # pep8-naming
+    "PTH",  # flake8-use-pathlib (prefer pathlib over os.path)
+    "PL",   # pylint-ported checks
+    "TRY",  # tryceratops (exception handling hygiene)
+    "C4",   # flake8-comprehensions
+    "A",    # flake8-builtins (shadowing builtins)
+    "ARG",  # flake8-unused-arguments
+    "RET",  # flake8-return
+]
+
+ignore = [
+    # pragmatic carve-outs
+    "E501",     # line too long (handled by formatter; line-length above is advisory)
+    "PLR0913",  # too many arguments — runner functions legitimately have many
+    "PLR2004",  # magic numbers — heartbeat budgets and similar are legitimate
+    "PLR0912",  # too many branches — orchestrator dispatch is branchy by nature
+    "PLR0915",  # too many statements — same reason
+    "TRY003",   # avoid long exception messages — we want informative ones
+    "TRY301",   # abstract-raise-to-its-own-function — overkill here
+    "N806",     # lowercase-in-function — Lean binder names leak into Python vars
+    "RUF012",   # mutable class attributes need ClassVar — optional pedantry
+]
+
+[tool.ruff.lint.per-file-ignores]
+# CLI entrypoints often have different needs
+"runner/__main__.py" = [
+    "PLR0911",  # too many return statements — CLI dispatch branches
+    "T201",     # print() is fine in CLI
+]
+
+[tool.ruff.format]
+# Matches Black defaults with a couple of tweaks
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

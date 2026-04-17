@@ -15,17 +15,22 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Iterable, Optional
 
 from .executor import lint_problem as lint_problem_subprocess
 from .executor import run_batch as run_batch_subprocess
-from .models import Problem, LintResult
-from .models import parse_lint_output, has_done_sentinel, make_provenance, DEFAULT_TIMEOUT
+from .models import (
+    DEFAULT_TIMEOUT,
+    LintResult,
+    Problem,
+    has_done_sentinel,
+    make_provenance,
+    parse_lint_output,
+)
 from .preamble import build_env_cmd as _build_env_cmd
 from .preamble import build_problem_cmd as _build_problem_cmd
 from .preamble import split_preamble as _split_preamble
-
 
 _SUBPROCESS_FALLBACK_ROWS = itertools.count()
 
@@ -118,7 +123,7 @@ class LeanRepl:
     ):
         self.workspace = workspace
         self.toolchain = toolchain
-        self.proc: Optional[asyncio.subprocess.Process] = None
+        self.proc: asyncio.subprocess.Process | None = None
         self._env_cache: dict[tuple[str, ...], int] = {}
         self._warmup_lock = warmup_lock
         self.max_cached_envs = max(1, max_cached_envs)
@@ -181,7 +186,7 @@ class LeanRepl:
                     pass
             self.proc = None
 
-    async def _restart(self) -> Optional[str]:
+    async def _restart(self) -> str | None:
         try:
             await self.stop()
             await self.start()
@@ -203,7 +208,7 @@ class LeanRepl:
             return ""
         return data.decode("utf-8", errors="replace").strip()
 
-    async def _send_cmd(self, cmd: str, timeout: int = 300, env: Optional[int] = None) -> dict:
+    async def _send_cmd(self, cmd: str, timeout: int = 300, env: int | None = None) -> dict:
         if not self.proc or self.proc.stdin is None or self.proc.stdout is None:
             raise ReplProtocolError("REPL is not running")
         if self.proc.returncode is not None:
@@ -249,7 +254,7 @@ class LeanRepl:
 
     async def _get_or_create_env(
         self, preamble: tuple[str, ...], timeout: int,
-    ) -> tuple[Optional[int], Optional[str], Optional[str], Optional[str]]:
+    ) -> tuple[int | None, str | None, str | None, str | None]:
         cached = self._env_cache.get(preamble)
         if cached is not None:
             return cached, None, None, None
@@ -306,7 +311,7 @@ class LeanRepl:
             stack.extend(children.get(pid, []))
         return total_kb / 1024.0
 
-    async def recycle_reason(self) -> Optional[str]:
+    async def recycle_reason(self) -> str | None:
         if len(self._env_cache) >= self.max_cached_envs:
             return f"cached_envs={len(self._env_cache)}>={self.max_cached_envs}"
         if self.problem_runs >= self.max_problem_runs:
@@ -447,9 +452,9 @@ class _Worker:
         self.timeout = timeout
         self.pending = 0
         self.queue: asyncio.Queue[tuple[Problem, tuple[tuple[str, ...], str], asyncio.Future[LintResult]] | None] = asyncio.Queue()
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()
-        self._start_error: Optional[str] = None
+        self._start_error: str | None = None
 
     @property
     def is_started(self) -> bool:
@@ -612,7 +617,7 @@ async def run_batch(
     problems: Iterable[Problem],
     toolchain: str,
     timeout: int = DEFAULT_TIMEOUT,
-    on_result: Optional[Callable] = None,
+    on_result: Callable | None = None,
     workers: int = 1,
     collect_results: bool = True,
 ) -> list[LintResult]:
@@ -626,7 +631,7 @@ async def run_batch(
 
     try:
         await pool.start()
-    except (FileNotFoundError, RuntimeError, ReplProtocolError, ReplTimeoutError) as exc:
+    except (FileNotFoundError, RuntimeError, ReplProtocolError, ReplTimeoutError):
         return await run_batch_subprocess(
             workspace,
             problems,

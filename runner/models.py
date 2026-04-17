@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Tuple
-
 
 # ---------------------------------------------------------------------------
 # Sentinel constants
@@ -38,12 +36,12 @@ class Finding:
     severity: str
     declaration: str
     message: str
-    suggestion: Optional[str] = None
+    suggestion: str | None = None
     confidence: str = "maybe"
-    proved_by: Optional[str] = None
+    proved_by: str | None = None
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Finding":
+    def from_dict(cls, d: dict) -> Finding:
         return cls(
             category=d.get("category", "unknown"),
             severity=d.get("severity", "warning"),
@@ -75,13 +73,13 @@ class LintResult:
     source: str
     status: str  # Primary outcome: ok, findings, compile_error, timeout, infra_error
     findings: list[Finding]
-    error_message: Optional[str]
+    error_message: str | None
     duration_ms: int
     provenance: Provenance
     compile_error: bool = False
-    compile_error_message: Optional[str] = None
-    dataset: Optional[str] = None
-    run_id: Optional[str] = None
+    compile_error_message: str | None = None
+    dataset: str | None = None
+    run_id: str | None = None
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -135,7 +133,7 @@ def make_provenance(toolchain: str) -> Provenance:
     )
 
 
-def parse_lint_output(text: str) -> Tuple[list[Finding], list[str]]:
+def parse_lint_output(text: str) -> tuple[list[Finding], list[str]]:
     """Extract ATP_LINT findings and malformed-line errors from linter output."""
     findings = []
     parse_errors = []
@@ -149,7 +147,7 @@ def parse_lint_output(text: str) -> Tuple[list[Finding], list[str]]:
     return findings, parse_errors
 
 
-def has_done_sentinel(text: str) -> Tuple[bool, Optional[dict]]:
+def has_done_sentinel(text: str) -> tuple[bool, dict | None]:
     """Check for ATP_DONE sentinel and parse its metadata."""
     for line in text.splitlines():
         if line.startswith(SENTINEL_DONE):

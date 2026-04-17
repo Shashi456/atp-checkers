@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Tuple, cast
+from typing import cast
 
-from .models import Problem, ParseError
+from .models import ParseError, Problem
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class ResolvedRow:
     """Result of resolving a raw dict into canonical fields."""
     id: str
     lean_code: str
-    natural_language: Optional[str]
+    natural_language: str | None
     strategy: str          # human-readable label of matched code strategy
     metadata: dict         # all unconsumed fields
 
@@ -158,7 +159,7 @@ def _resolved_to_problem(resolved: ResolvedRow, source: str) -> Problem:
     )
 
 
-def _collect_items(items: Iterator[DatasetItem]) -> Tuple[list[Problem], list[ParseError]]:
+def _collect_items(items: Iterator[DatasetItem]) -> tuple[list[Problem], list[ParseError]]:
     problems: list[Problem] = []
     errors: list[ParseError] = []
     for item in items:
@@ -178,7 +179,7 @@ def load_jsonl(
     source: str | None = None,
     on_error: str = "skip",
     header: str | None = None,
-) -> Tuple[list[Problem], list[ParseError]]:
+) -> tuple[list[Problem], list[ParseError]]:
     """Load problems from a JSONL file.
 
     Supports any schema recognized by the field resolver.
@@ -207,7 +208,7 @@ def iter_jsonl(
 
     first_strategy = None
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line_num, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
@@ -240,7 +241,7 @@ def iter_jsonl(
 
 def count_jsonl_entries(path: Path) -> int:
     """Count non-empty JSONL lines for progress reporting."""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return sum(1 for line in f if line.strip())
 
 
@@ -253,7 +254,7 @@ def load_json(
     path: Path,
     source: str | None = None,
     header: str | None = None,
-) -> Tuple[list[Problem], list[ParseError]]:
+) -> tuple[list[Problem], list[ParseError]]:
     """Load problems from a JSON file containing an array of objects.
 
     Args:
@@ -276,7 +277,7 @@ def iter_json(
     if source is None:
         source = path.stem
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:
@@ -315,7 +316,7 @@ def load_lean_dir(
     directory: Path,
     source: str | None = None,
     header: str | None = None,
-) -> Tuple[list[Problem], list[ParseError]]:
+) -> tuple[list[Problem], list[ParseError]]:
     """Load problems from a directory of .lean files.
 
     Each .lean file becomes one Problem. The filename stem is the ID.
@@ -385,7 +386,7 @@ def load_hf(
     split: str | None = None,
     header: str | None = None,
     source: str | None = None,
-) -> Tuple[list[Problem], list[ParseError]]:
+) -> tuple[list[Problem], list[ParseError]]:
     """Load problems from a HuggingFace dataset.
 
     Requires: pip install datasets

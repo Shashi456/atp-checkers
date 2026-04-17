@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 
-
 _TRAILING_BY_RE = re.compile(r"\bby(?:\s*--[^\n]*)?\s*$")
 
 
@@ -21,8 +20,7 @@ def split_preamble(lean_code: str) -> tuple[tuple[str, ...], str]:
             if block_comment_depth > 0:
                 body_lines.append(line)
                 block_comment_depth += line.count("/-") - line.count("-/")
-                if block_comment_depth < 0:
-                    block_comment_depth = 0
+                block_comment_depth = max(block_comment_depth, 0)
                 continue
 
             if not stripped or stripped.startswith("--"):
@@ -32,8 +30,7 @@ def split_preamble(lean_code: str) -> tuple[tuple[str, ...], str]:
             if stripped.startswith("/-"):
                 body_lines.append(line)
                 block_comment_depth = stripped.count("/-") - stripped.count("-/")
-                if block_comment_depth < 0:
-                    block_comment_depth = 0
+                block_comment_depth = max(block_comment_depth, 0)
                 continue
 
             if stripped.startswith(("import ", "open ", "set_option ")):
