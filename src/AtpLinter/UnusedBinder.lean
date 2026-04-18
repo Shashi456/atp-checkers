@@ -48,6 +48,17 @@ def isUnderscoreName (name : Name) : Bool :=
   let str := name.toString
   str == "_" || str.startsWith "_" || (str.splitOn "_hyg.").length > 1
 
+/-- Type-former heads whose λ argument is a component of the underlying function
+    type (not a user-introduced quantifier). Examples: `EuclideanSpace ℝ (Fin 2)`
+    unfolds to `PiLp 2 (fun _ : Fin 2 => ℝ)`, where the λ's unused binder is
+    structural, not a semantic "unused ∀". Uses string comparison to avoid
+    requiring heavy Mathlib imports for each named type. -/
+def isTypeFormerHead (name : Name) : Bool :=
+  let s := name.toString
+  s == "PiLp" || s == "EuclideanSpace" || s == "Matrix" || s == "Finsupp"
+    || s == "ContinuousMap" || s == "LinearMap" || s == "AlgHom"
+    || s == "MvPolynomial" || s == "Pi"
+
 /-- Check if a binder should be suppressed from unused warnings -/
 def shouldSuppressBinder (name : Name) (bi : BinderInfo) (ty : Expr) : MetaM Bool := do
   -- Suppress if explicitly unnamed (includes hygiene-renamed underscores)
@@ -65,6 +76,10 @@ def shouldSuppressBinder (name : Name) (bi : BinderInfo) (ty : Expr) : MetaM Boo
   -- Suppress Prop-typed binders (proof hypotheses)
   let isPropTy ← isProp ty
   if isPropTy then return true
+
+  -- Suppress binders whose type contains a synthetic sorry — elaboration already
+  -- failed, and the finding would be noise on a broken declaration.
+  if ty.hasSyntheticSorry then return true
 
   return false
 
@@ -147,6 +162,27 @@ partial def findUnusedBinders (e : Expr) : MetaM (Array UnusedBinderInfo) := do
       results := results.push r
 
   | .app f a =>
+    -- Type-former whitelist: if `f` is a known type-former head applied to a λ,
+    -- the λ is a structural component of the function type (e.g. `PiLp 2
+    -- (fun _ : Fin 2 => ℝ)`). Do NOT report the λ's unused binder; still recurse
+    -- into its body and type so we catch nested ∀/∃ issues.
+    let fHead := f.getAppFn
+    if let .const headName _ := fHead then
+      if isTypeFormerHead headName then
+        match a with
+        | .lam n ty body bi =>
+          let bodyResults ← withLocalDecl n bi ty fun fvar => do
+            findUnusedBinders (body.instantiate1 fvar)
+          for r in bodyResults do
+            results := results.push r
+          let typeResults ← findUnusedBinders ty
+          for r in typeResults do
+            results := results.push r
+          -- Don't fall through to the normal-application branch.
+          for r in (← findUnusedBinders f) do
+            results := results.push r
+          return results
+        | _ => pure ()
     -- m2 fix: Check for Exists application to properly label existential binders
     match f with
     | .const ``Exists _ =>

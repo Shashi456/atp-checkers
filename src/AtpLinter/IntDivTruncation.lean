@@ -176,6 +176,34 @@ def classifyTruncation (dividendVal divisorVal : Option Int) : TruncationStatus 
 
 /-! ## Phase 4: Prefix-Context Traversal -/
 
+/-- Scan the local context for a hypothesis that proves exact division, silencing
+    the `mayTruncate` warning. Patterns detected:
+    - `divisor ∣ dividend`
+    - `dividend % divisor = 0`
+    - `Even dividend` (when divisor is the literal 2)
+    - `Odd (dividend ± 1)` (when divisor is the literal 2) -/
+def hasExactDivGuard (dividend divisor : Expr) : MetaM Bool := do
+  let lctx ← getLCtx
+  lctx.anyM fun decl => do
+    if decl.isImplementationDetail then return false
+    let ty ← inferType (mkFVar decl.fvarId) >>= instantiateMVars
+    -- Pattern: divisor ∣ dividend
+    if ty.isAppOfArity ``Dvd.dvd 4 then
+      let args := ty.getAppArgs
+      if (← isDefEq args[2]! divisor) && (← isDefEq args[3]! dividend) then
+        return true
+    -- Pattern: dividend % divisor = 0
+    if ty.isAppOfArity ``Eq 3 then
+      let lhs := ty.getAppArgs[1]!
+      let rhs := ty.getAppArgs[2]!
+      if lhs.isAppOfArity ``HMod.hMod 6 then
+        let a := lhs.getAppArgs[4]!
+        let b := lhs.getAppArgs[5]!
+        let rhsIsZero := rhs.nat? == some 0 || (rhs.int?.map (· == 0)).getD false
+        if rhsIsZero && (← isDefEq a dividend) && (← isDefEq b divisor) then
+          return true
+    return false
+
 /-- Core visitor that uses PREFIX-CONTEXT traversal for correct binder handling.
     Pretty-prints expressions at discovery time when binders are in scope.
 
@@ -187,13 +215,19 @@ partial def findDivisionsCore (e : Expr) : MetaM (Array TruncDivInfo) := do
 
   -- Check if this expression is a division
   if let some (dividend, divisor, kind) := matchIntegerDiv? e then
-    -- Use kind-appropriate literal extraction (Int for Int divisions, Nat→Int for Nat)
     let dividendVal := getLitVal? dividend kind
     let divisorVal := getLitVal? divisor kind
     let status := classifyTruncation dividendVal divisorVal
 
-    if status != .noTruncate then
-      -- Pretty-print NOW while we have the correct context
+    -- Suppress `mayTruncate` when the local context proves exact division.
+    -- We never suppress `willTruncate` (already proven unsafe by literal arith).
+    let shouldEmit ←
+      if status == .mayTruncate then
+        pure !(← hasExactDivGuard dividend divisor)
+      else
+        pure (status != .noTruncate)
+
+    if shouldEmit then
       let dividendStr ← ppExprSimple dividend
       let divisorStr ← ppExprSimple divisor
       results := results.push {
