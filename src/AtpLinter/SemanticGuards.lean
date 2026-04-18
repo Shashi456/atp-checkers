@@ -33,6 +33,7 @@ import Mathlib.Algebra.CharZero.Defs
 import Mathlib.Data.Nat.Prime.Basic
 import Mathlib.Order.Interval.Finset.Basic
 import Mathlib.Order.Interval.Set.Basic
+import Mathlib.Tactic.Linarith
 
 open Lean Meta
 open Qq
@@ -49,6 +50,7 @@ inductive ProvedBy where
   | omega       -- Closed by omega tactic on linear arithmetic
   | positivity  -- Derived from positivity hypothesis (0 < x → x ≠ 0)
   | grind       -- Closed by grind SMT-style solver
+  | nlinarith   -- Closed by Mathlib's nonlinear linarith variant
   deriving Inhabited, Repr, BEq
 
 /--
@@ -381,6 +383,23 @@ private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) : MetaM (Op
   catch _ => return none
   finally saved.restore
 
+/-- Try to close a fresh mvar for `goal` using nlinarith (linarith with the
+    nonlinear preprocessor extras). Side-effect free. -/
+private def tryNlinarith? (goal : Expr) : MetaM (Option (Expr × ProvedBy)) := do
+  let saved ← Meta.saveState
+  try
+    let m ← mkFreshExprMVar goal
+    let g := m.mvarId!
+    let baseCfg : Mathlib.Tactic.Linarith.LinarithConfig := {}
+    let cfg := { baseCfg with
+      preprocessors := baseCfg.preprocessors.concat Mathlib.Tactic.Linarith.nlinarithExtras }
+    Mathlib.Tactic.Linarith.linarith false [] cfg g
+    if ← g.isAssigned then
+      return some ((← instantiateMVars m), ProvedBy.nlinarith)
+    return none
+  catch _ => return none
+  finally saved.restore
+
 
 /-- Try to close a positivity-shaped goal using Mathlib's positivity engine. -/
 private def tryPositivity? (goal : Expr) : MetaM (Option ProvedBy) := do
@@ -424,7 +443,7 @@ Note: simp is disabled for performance - the full Mathlib simp set is too slow.
 This function is side-effect free (restores meta state).
 -/
 private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
-    : MetaM (Option (Expr × ProvedBy)) := do
+    (useNlinarith : Bool := false) : MetaM (Option (Expr × ProvedBy)) := do
   let saved ← Meta.saveState
   try
     let m ← mkFreshExprMVar goal
@@ -474,7 +493,7 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
           if ← gFalse.isAssigned then
             return some ((← instantiateMVars m), ProvedBy.omega)
 
-    -- 4) grind (when enabled, last resort — SMT-style solver)
+    -- 4) grind (when enabled — SMT-style solver)
     if useGrind then
       -- Need a fresh mvar since the previous one may have been partially assigned
       let m' ← mkFreshExprMVar goal
@@ -484,6 +503,11 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
       if result.failure?.isNone then
         return some ((← instantiateMVars m'), ProvedBy.grind)
 
+    -- 5) nlinarith (when enabled — nonlinear linarith, last resort for real arith)
+    if useNlinarith then
+      if let some result ← tryNlinarith? goal then
+        return some result
+
     return none
   catch _ =>
     return none
@@ -491,8 +515,9 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
     saved.restore
 
 def tryProve? (goal : Expr) (useOmega : Bool := true) (useGrind : Bool := false)
-    : MetaM (Option ProvedBy) := do
-  return (← tryProveProof? goal (useOmega := useOmega) (useGrind := useGrind)).map Prod.snd
+    (useNlinarith : Bool := false) : MetaM (Option ProvedBy) := do
+  return (← tryProveProof? goal (useOmega := useOmega) (useGrind := useGrind)
+    (useNlinarith := useNlinarith)).map Prod.snd
 
 
 /-- Try to prove `d ≠ 0` by unwrapping a cast and proving nonzero on the source type.
@@ -742,6 +767,7 @@ def ProvedBy.toString : ProvedBy → String
   | .omega => "omega"
   | .positivity => "positivity"
   | .grind => "grind"
+  | .nlinarith => "nlinarith"
 
 end SemanticGuards
 end AtpLinter

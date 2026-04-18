@@ -144,8 +144,9 @@ def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
     | none => return none
     | some zero =>
       let goal ← mkLE zero x
-      -- omega won't help for Real; grind handles ordered-field reasoning
-      tryProve? goal (useOmega := false) (useGrind := true)
+      -- omega won't help for Real; grind handles ordered-field; nlinarith
+      -- closes quadratic-form PSD and trig-bounded non-negativity goals.
+      tryProve? goal (useOmega := false) (useGrind := true) (useNlinarith := true)
 
 /-- Check if `x` is `abs y` or `|y|` — if so, prove strict positivity by showing
     `y ≠ 0` instead (since `|y| > 0 ↔ y ≠ 0`). -/
@@ -174,7 +175,7 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
     if let some zero := zero? then
       let neGoal ← withSnapshot snap <| mkAppM ``Ne #[inner, zero]
       let neResult ← withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
-        tryProve? neGoal (useOmega := false) (useGrind := true)
+        tryProve? neGoal (useOmega := false) (useGrind := true) (useNlinarith := true)
       if neResult.isSome then return neResult
 
   withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
@@ -183,8 +184,9 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
     | none => return none
     | some zero =>
       let goal ← mkLT zero x
-      -- omega won't help for Real; grind handles ordered-field reasoning
-      tryProve? goal (useOmega := false) (useGrind := true)
+      -- omega won't help for Real; grind handles ordered-field; nlinarith
+      -- closes polynomial positivity bounds unreachable by grind alone.
+      tryProve? goal (useOmega := false) (useGrind := true) (useNlinarith := true)
 
 /-- Prove x ≠ 0. Enriches local context with derived facts and expanded
     conjunctions, and tries structural nonzero closure (mul_ne_zero,
@@ -204,7 +206,8 @@ def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
     | some zero =>
       -- Try direct proof first
       let goal ← mkAppM ``Ne #[x, zero]
-      if let some how ← tryProve? goal (useOmega := true) (useGrind := true) then
+      if let some how ← tryProve? goal (useOmega := true) (useGrind := true)
+          (useNlinarith := true) then
         return some how
       -- Try structural nonzero closure (mul_ne_zero, pow_ne_zero)
       if let some (_, how) ← proveStructuralNonzero? x (useGrind := true) then
