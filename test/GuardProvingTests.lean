@@ -660,4 +660,36 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp dependentPropLeak
 
+-- ============================================================
+-- Phase 1: Finset/Set membership + Nat.Prime extractors
+-- ============================================================
+
+/-- NatSub guarded by Finset.Icc membership: `k ∈ Finset.Icc 1 10` ⇒ `1 ≤ k`. -/
+def natSubMemFinsetIcc (k : ℕ) (h : k ∈ Finset.Icc 1 10) : ℕ := k - 1
+/--
+info: ✓ GuardProving.natSubMemFinsetIcc: No issues detected
+-/
+#guard_msgs in #check_atp natSubMemFinsetIcc
+
+/-- NatSub guarded by Finset.Ico membership: `k ∈ Finset.Ico 0 n` ⇒ `k < n`. -/
+def natSubMemFinsetIco (n k : ℕ) (h : k ∈ Finset.Ico 0 n) : ℕ := n - k
+/--
+info: ✓ GuardProving.natSubMemFinsetIco: No issues detected
+-/
+#guard_msgs in #check_atp natSubMemFinsetIco
+
+/-- NatSub guarded by Nat.Prime hypothesis: `Nat.Prime p` ⇒ `2 ≤ p` ⇒ `1 ≤ p`. -/
+def natSubPrime (p : ℕ) (hp : Nat.Prime p) : ℕ := p - 1
+/--
+info: ✓ GuardProving.natSubPrime: No issues detected
+-/
+#guard_msgs in #check_atp natSubPrime
+
+/-- NatSub guarded by Set.Ioo membership: `k ∈ Set.Ioo 0 10` ⇒ `0 < k`. -/
+def natSubMemSetIoo (k : ℕ) (h : k ∈ Set.Ioo 0 10) : ℕ := k - 1
+/--
+info: ✓ GuardProving.natSubMemSetIoo: No issues detected
+-/
+#guard_msgs in #check_atp natSubMemSetIoo
+
 end GuardProving

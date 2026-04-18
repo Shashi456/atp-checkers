@@ -30,6 +30,9 @@ import AtpLinter.Basic
 import Mathlib.Tactic.Positivity
 import Mathlib.Data.Real.Sqrt
 import Mathlib.Algebra.CharZero.Defs
+import Mathlib.Data.Nat.Prime.Basic
+import Mathlib.Order.Interval.Finset.Basic
+import Mathlib.Order.Interval.Set.Basic
 
 open Lean Meta
 open Qq
@@ -75,28 +78,109 @@ private def getLocalPropHyps : MetaM (List Expr) := do
         return acc
 
 
+/-- Map from a Finset/Set interval-head name to the `mem_*` iff lemma whose `.mp`
+    extracts the order facts we want in scope. Returns `none` when the container
+    head isn't a recognised interval shape. -/
+private def intervalMemLemma? (headName : Name) : Option Name :=
+  match headName with
+  -- Finset intervals
+  | ``Finset.Icc   => some ``Finset.mem_Icc
+  | ``Finset.Ico   => some ``Finset.mem_Ico
+  | ``Finset.Ioc   => some ``Finset.mem_Ioc
+  | ``Finset.Ioo   => some ``Finset.mem_Ioo
+  | ``Finset.range => some ``Finset.mem_range
+  -- Set intervals
+  | ``Set.Icc      => some ``Set.mem_Icc
+  | ``Set.Ico      => some ``Set.mem_Ico
+  | ``Set.Ioc      => some ``Set.mem_Ioc
+  | ``Set.Ioo      => some ``Set.mem_Ioo
+  | ``Set.Ici      => some ``Set.mem_Ici
+  | ``Set.Iic      => some ``Set.mem_Iic
+  | ``Set.Ioi      => some ``Set.mem_Ioi
+  | ``Set.Iio      => some ``Set.mem_Iio
+  | _              => none
+
+/-- Apply an iff-lemma with all-implicit args by instantiating the lemma with
+    fresh mvars, unifying its LHS with the type of `h`, synthesising any
+    remaining instance-implicit mvars, and projecting via `Iff.mp`. -/
+private def tryApplyMemIff (lemmaName : Name) (h : Expr) :
+    MetaM (Option Expr) := do
+  try
+    let lemmaConst ← mkConstWithFreshMVarLevels lemmaName
+    let lemmaType ← inferType lemmaConst
+    let (mvars, binderInfos, iffType) ← forallMetaTelescope lemmaType
+    let some (lhs, _) := iffType.iff? | return none
+    let hType ← inferType h
+    unless (← isDefEq lhs hType) do return none
+    for i in [:mvars.size] do
+      if binderInfos[i]!.isInstImplicit then
+        try
+          let mvarType ← inferType mvars[i]!
+          let inst ← synthInstance mvarType
+          unless (← isDefEq mvars[i]! inst) do return none
+        catch _ => return none
+    let iffProof := mkAppN lemmaConst mvars
+    some <$> mkAppM ``Iff.mp #[iffProof, h]
+  catch _ =>
+    return none
+
+/-- Resolve let-bindings to expose the container's concrete head. Critically
+    does NOT whnf — that would unfold reducible defs like `Finset.Icc` into
+    their constructor form, losing the name we match on. -/
+private def resolveContainer (container : Expr) : MetaM Expr := do
+  let stepped ← instantiateMVars container
+  Meta.transform stepped (post := fun e => do
+    if e.isFVar then
+      if let some decl := (← getLCtx).find? e.fvarId! then
+        if let some value := decl.value? then return .done value
+    return .done e)
+
+/-- Try to derive order facts from an `elem ∈ interval` hypothesis via the
+    corresponding `mem_*` iff lemma. -/
+private def tryIntervalMembershipFact (h ht : Expr) : MetaM (Option Expr) := do
+  unless ht.isAppOfArity ``Membership.mem 5 do return none
+  let container := ht.getAppArgs[3]!
+  let containerResolved ← resolveContainer container
+  let hn := containerResolved.getAppFn.constName?.getD .anonymous
+  let some lemmaName := intervalMemLemma? hn | return none
+  tryApplyMemIff lemmaName h
+
 /-- Introduce proposition-valued structure fields that are worth exposing to the
-    guard prover, such as `Subtype.property` and `Fin.isLt`. -/
+    guard prover: `Subtype.property`, `Fin.isLt`, Finset/Set interval membership
+    bounds, and `Nat.Prime`/`Fact (Nat.Prime _)` ⇒ `2 ≤ p`. -/
 def withDerivedLocalFacts (k : MetaM α) : MetaM α := do
   let lctx ← getLCtx
   let facts ← lctx.foldlM (init := []) fun acc decl => do
     if decl.isImplementationDetail then
       return acc
-    else
-      let h : Expr := mkFVar decl.fvarId
-      let ht ← whnf (← inferType h)
-      if ht.getAppFn.isConstOf ``Subtype then
+    let h : Expr := mkFVar decl.fvarId
+    let htRaw ← inferType h
+    let ht ← whnf htRaw
+    -- Subtype.property
+    if ht.getAppFn.isConstOf ``Subtype then
+      try return (← mkAppM ``Subtype.property #[h]) :: acc
+      catch _ => return acc
+    -- Fin.isLt
+    if ht.getAppFn.isConstOf ``Fin then
+      try return (← mkAppM ``Fin.isLt #[h]) :: acc
+      catch _ => return acc
+    -- Nat.Prime p  ⇒  2 ≤ p  (check raw type; Nat.Prime is reducible in Mathlib)
+    if htRaw.isAppOfArity ``Nat.Prime 1 then
+      try return (← mkAppM ``Nat.Prime.two_le #[h]) :: acc
+      catch _ => return acc
+    -- Fact (Nat.Prime p)  ⇒  2 ≤ p  (via Fact.out)
+    if htRaw.isAppOfArity ``Fact 1 then
+      let inner := htRaw.appArg!
+      if inner.isAppOfArity ``Nat.Prime 1 then
         try
-          return (← mkAppM ``Subtype.property #[h]) :: acc
-        catch _ =>
-          return acc
-      else if ht.getAppFn.isConstOf ``Fin then
-        try
-          return (← mkAppM ``Fin.isLt #[h]) :: acc
-        catch _ =>
-          return acc
-      else
-        return acc
+          let primePf ← mkAppM ``Fact.out #[h]
+          return (← mkAppM ``Nat.Prime.two_le #[primePf]) :: acc
+        catch _ => return acc
+    -- elem ∈ Finset.Icc/Ico/Ioc/Ioo/range or Set.Icc/.../Ioi/Iio
+    -- Use htRaw: whnf can unfold `Membership.mem` past the head we want to match.
+    if let some memFact ← tryIntervalMembershipFact h htRaw then
+      return memFact :: acc
+    return acc
   let rec go (todo : List Expr) : MetaM α := do
     match todo with
     | [] => k
