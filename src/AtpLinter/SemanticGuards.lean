@@ -384,19 +384,23 @@ private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) : MetaM (Op
   finally saved.restore
 
 /-- Try to close a fresh mvar for `goal` using nlinarith (linarith with the
-    nonlinear preprocessor extras). Side-effect free. -/
+    nonlinear preprocessor extras). Bounded by a tight heartbeat budget so a
+    single unsolvable goal can't dominate per-decl runtime (nlinarith's
+    nonlinear preprocessing is exponential in the number of hypotheses).
+    Side-effect free. -/
 private def tryNlinarith? (goal : Expr) : MetaM (Option (Expr × ProvedBy)) := do
   let saved ← Meta.saveState
   try
-    let m ← mkFreshExprMVar goal
-    let g := m.mvarId!
-    let baseCfg : Mathlib.Tactic.Linarith.LinarithConfig := {}
-    let cfg := { baseCfg with
-      preprocessors := baseCfg.preprocessors.concat Mathlib.Tactic.Linarith.nlinarithExtras }
-    Mathlib.Tactic.Linarith.linarith false [] cfg g
-    if ← g.isAssigned then
-      return some ((← instantiateMVars m), ProvedBy.nlinarith)
-    return none
+    withOptions (fun opts => opts.set `maxHeartbeats (20000 : Nat)) do
+      let m ← mkFreshExprMVar goal
+      let g := m.mvarId!
+      let baseCfg : Mathlib.Tactic.Linarith.LinarithConfig := {}
+      let cfg := { baseCfg with
+        preprocessors := baseCfg.preprocessors.concat Mathlib.Tactic.Linarith.nlinarithExtras }
+      Mathlib.Tactic.Linarith.linarith false [] cfg g
+      if ← g.isAssigned then
+        return some ((← instantiateMVars m), ProvedBy.nlinarith)
+      return none
   catch _ => return none
   finally saved.restore
 
