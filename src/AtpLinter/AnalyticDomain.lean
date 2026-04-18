@@ -147,14 +147,36 @@ def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
       -- omega won't help for Real; grind handles ordered-field reasoning
       tryProve? goal (useOmega := false) (useGrind := true)
 
+/-- Check if `x` is `abs y` or `|y|` — if so, prove strict positivity by showing
+    `y ≠ 0` instead (since `|y| > 0 ↔ y ≠ 0`). -/
+private def unwrapAbs? (x : Expr) : Option Expr :=
+  -- `abs y` in Mathlib elaborates to `@abs _ _ y` (arity 3) or in ordered algebra
+  -- contexts to `|y|` notation. Match both common forms.
+  if x.isAppOfArity ``abs 3 then
+    some x.getAppArgs[2]!
+  else
+    none
+
 /-- Prove 0 < x. Enriches local context with derived facts and expanded
-    conjunctions before proving, matching proveDivisorSafe?. -/
+    conjunctions before proving, matching proveDivisorSafe?.
+    Special case: `0 < |y|` is pivoted to `y ≠ 0`. -/
 def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM (Option ProvedBy) := do
   -- First check obvious cases
   if ← isObviouslyPos x then
     return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
+  -- Pivot `0 < |y|` → `y ≠ 0`. This unblocks `log(|y|)` and `sqrt(|y|)`-style
+  -- patterns where the formalizer knows `y ≠ 0` but not directly `|y| > 0`.
+  if let some inner := unwrapAbs? x then
+    let ty ← inferType inner
+    let zero? ← mkZeroOf ty
+    if let some zero := zero? then
+      let neGoal ← withSnapshot snap <| mkAppM ``Ne #[inner, zero]
+      let neResult ← withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
+        tryProve? neGoal (useOmega := false) (useGrind := true)
+      if neResult.isSome then return neResult
+
   withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
     let ty ← inferType x
     match ← mkZeroOf ty with
