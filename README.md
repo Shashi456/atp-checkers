@@ -234,25 +234,55 @@ atp-checkers/
 
 ## Building from Source
 
-**Requirements:** Lean 4 v4.29.0-rc6, Python 3.8+
+**Requirements:** Lean 4 v4.28.0 (pinned via `lean-toolchain`), Python ≥ 3.10.
+The Python runner uses only the stdlib — no `pip install` needed for pure
+linting; optional `ruff` for dev lint.
+
+### One-liner bootstrap
 
 ```bash
-# Clone and build
 git clone https://github.com/Shashi456/atp-checkers.git
 cd atp-checkers
-lake build                    # ~36 compile jobs
+./install.sh                  # elan + lake exe cache get + lake build + smoke test
+```
 
-# Run gating tests (should all pass)
+### Manual steps
+
+```bash
+# 1. Install elan (Lean version manager) if you don't have it
+curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+  | sh -s -- -y --default-toolchain none
+
+# 2. Clone the repo
+git clone https://github.com/Shashi456/atp-checkers.git
+cd atp-checkers
+
+# 3. Fetch pre-built Mathlib oleans from the community cache (optional but saves
+#    30+ minutes on first build; the fallback is building Mathlib locally)
+lake exe cache get || true
+
+# 4. Build the linter (2958 jobs including Mathlib — ~5 min with cache, ~30 min without)
+lake build
+
+# 5. Run gating tests (should all pass)
 lake build AtpLinterTest
 
-# Run demo tests (non-gating, diagnostic output)
+# 6. Run demo tests (non-gating, diagnostic output)
 lake build AtpLinterDemo
 ```
 
-**Mathlib note:** The linter depends on Mathlib for type information. `lake build`
-fetches and builds it automatically, which takes significant time on first run.
-The `minimal_no_mathlib.jsonl` dataset works without a full Mathlib build for
-quick smoke testing.
+**Smoke test without Mathlib** (useful to confirm the runner works before
+committing to the full Mathlib build):
+
+```bash
+python -m runner datasets/examples/minimal_no_mathlib.jsonl \
+  --workspace . --output /tmp/smoke --timeout 30
+```
+
+**If `lake build` fails with `incompatible header` errors** on `.olean` files,
+the `.lake/packages/mathlib/.lake/build/` tree is stale (built against a
+different Lean binary). Fix: `lake build Mathlib` to force a rebuild, or
+`rm -rf .lake/packages/mathlib/.lake/build && lake build` for a clean slate.
 
 ## Limitations
 
