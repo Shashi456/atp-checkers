@@ -9,6 +9,7 @@
 -/
 
 import Lean
+import Lean.Util.CollectAxioms
 
 open Lean
 
@@ -31,10 +32,14 @@ def isLeanNamespace (name : Name) : Bool :=
   | `Init => true
   | _ => false
 
+/-- True for declarations coming from an imported module. -/
+def isImportedDecl (env : Environment) (name : Name) : Bool :=
+  (env.getModuleIdxFor? name).isSome
+
 /-- Check if a name is a standard/allowed axiom -/
-def isStandardAxiom (name : Name) : Bool :=
+def isStandardAxiom (env : Environment) (name : Name) : Bool :=
   standardAxioms.contains name ||
-  isLeanNamespace name ||
+  (isLeanNamespace name && isImportedDecl env name) ||
   -- Also allow specific Classical axioms
   match name with
   | .str p "choice" => p == `Classical
@@ -42,12 +47,30 @@ def isStandardAxiom (name : Name) : Bool :=
   | .str p "propDecidable" => p == `Classical
   | _ => false
 
+/-- True when `name` is a non-whitelisted user axiom whose type is a Prop. -/
+def isUserPropAxiom (env : Environment) (name : Name) : MetaM Bool := do
+  match env.find? name with
+  | some (.axiomInfo info) =>
+      let isPropType ← Meta.isProp info.type
+      return isPropType && !isStandardAxiom env name
+  | _ => return false
+
+/-- User Prop axioms transitively used by a declaration. -/
+def userPropAxiomDependencies (env : Environment) (declName : Name) : MetaM (Array Name) := do
+  let mut deps := #[]
+  for name in ← Lean.collectAxioms declName do
+    if ← isUserPropAxiom env name then
+      if !deps.contains name then
+        deps := deps.push name
+  return deps
+
 /-- Result of analyzing a declaration for axiom usage -/
 structure AnalysisResult where
   declName : Name
   isAxiom : Bool
   isUserAxiom : Bool  -- axiom AND not standard
   isProp : Bool       -- type is Prop (asserting a proposition)
+  depAxioms : Array Name := #[] -- user Prop axioms this declaration depends on
   deriving Inhabited
 
 /-- Analyze a declaration for axiom usage -/
@@ -63,15 +86,21 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     return {
       declName := declName
       isAxiom := true
-      isUserAxiom := !isStandardAxiom declName
+      isUserAxiom := !isStandardAxiom env declName
       isProp := isPropType
+      depAxioms := #[]
     }
   | _ =>
+    let depAxioms ←
+      match constInfo.value? with
+      | some _ => userPropAxiomDependencies env declName
+      | none => pure #[]
     return {
       declName := declName
       isAxiom := false
       isUserAxiom := false
       isProp := false
+      depAxioms := depAxioms
     }
 
 /-- Generate a report for a single declaration -/

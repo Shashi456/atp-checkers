@@ -6,9 +6,10 @@
 
   Approach:
   1. Try `assumption` (catches direct hypotheses like `h : x ≠ 0`)
-  2. Try a small, targeted simp for structural cases (e.g., `Nat.succ n ≠ 0`)
+  2. Try Mathlib's positivity engine for standard nonzero/nonnegative goals
   3. Try `omega` (Nat/Int linear arithmetic), via falseOrByContra pipeline
-  4. Side-effect free: saves/restores meta state
+  4. Try structural nonzero/cast-transport rules and optional `grind`
+  5. Side-effect free: saves/restores meta state
 
   SOUNDNESS NOTES:
   - For division: only `d ≠ 0` (or `0 ≠ d`) counts as a valid guard
@@ -29,6 +30,7 @@ import Lean.Meta.Tactic.Grind
 import AtpLinter.Basic
 import Mathlib.Tactic.Positivity
 import Mathlib.Data.Real.Sqrt
+import Mathlib.Analysis.Complex.Norm
 import Mathlib.Algebra.CharZero.Defs
 
 open Lean Meta
@@ -36,6 +38,21 @@ open Qq
 
 namespace AtpLinter
 namespace SemanticGuards
+
+private def maxForallCandidateTerms : Nat := 24
+private def maxForallInstantiatedFacts : Nat := 16
+private def maxForallDefEqAttempts : Nat := 256
+private def maxForallMatchesPerBinder : Nat := 8
+private def maxStructureFieldFactsPerLocal : Nat := 8
+private def maxStructureFieldFactsTotal : Nat := 64
+
+private def arrayTake {α : Type} (xs : Array α) (limit : Nat) : Array α := Id.run do
+  let mut out := #[]
+  for x in xs do
+    if out.size >= limit then
+      break
+    out := out.push x
+  return out
 
 /-- Where a guard proof came from (useful for debugging / stats). -/
 inductive ProvedBy where
@@ -74,29 +91,64 @@ private def getLocalPropHyps : MetaM (List Expr) := do
       else
         return acc
 
+/-- Project proposition-valued fields from a structure-valued local. This covers
+    user structures like `{ val : Nat, ne_zero : val ≠ 0 }` without opening
+    typeclass instances or large implementation-detail locals. -/
+private def collectPropStructureFieldFacts (h ht : Expr)
+    (limit : Nat := maxStructureFieldFactsPerLocal) : MetaM (Array Expr) := do
+  match ht.getAppFn with
+  | .const structName _ =>
+      let env ← getEnv
+      if (getStructureInfo? env structName).isNone then
+        return #[]
+      let fields := getStructureFieldsFlattened env structName (includeSubobjectFields := false)
+      let mut facts := #[]
+      for fieldName in fields do
+        if facts.size >= limit then
+          break
+        match getProjFnForField? env structName fieldName with
+        | none => pure ()
+        | some projFn =>
+            try
+              let fact ← mkAppM projFn #[h]
+              let factType ← inferType fact
+              if ← isProp factType then
+                facts := facts.push fact
+            catch _ =>
+              pure ()
+      return facts
+  | _ => return #[]
 
 /-- Introduce proposition-valued structure fields that are worth exposing to the
     guard prover, such as `Subtype.property` and `Fin.isLt`. -/
 def withDerivedLocalFacts (k : MetaM α) : MetaM α := do
   let lctx ← getLCtx
-  let facts ← lctx.foldlM (init := []) fun acc decl => do
+  let (facts, _) ← lctx.foldlM (init := (([] : List Expr), 0)) fun state decl => do
+    let (acc, structureFactCount) := state
     if decl.isImplementationDetail then
-      return acc
+      return (acc, structureFactCount)
     else
       let h : Expr := mkFVar decl.fvarId
       let ht ← whnf (← inferType h)
       if ht.getAppFn.isConstOf ``Subtype then
         try
-          return (← mkAppM ``Subtype.property #[h]) :: acc
+          return ((← mkAppM ``Subtype.property #[h]) :: acc, structureFactCount)
         catch _ =>
-          return acc
+          return (acc, structureFactCount)
       else if ht.getAppFn.isConstOf ``Fin then
         try
-          return (← mkAppM ``Fin.isLt #[h]) :: acc
+          return ((← mkAppM ``Fin.isLt #[h]) :: acc, structureFactCount)
         catch _ =>
-          return acc
+          return (acc, structureFactCount)
       else
-        return acc
+        if decl.binderInfo.isInstImplicit || structureFactCount >= maxStructureFieldFactsTotal then
+          return (acc, structureFactCount)
+        else
+          let remaining := maxStructureFieldFactsTotal - structureFactCount
+          let perLocal := min maxStructureFieldFactsPerLocal remaining
+          let facts ← collectPropStructureFieldFacts h ht perLocal
+          let acc := facts.foldl (init := acc) fun acc fact => fact :: acc
+          return (acc, structureFactCount + facts.size)
   let rec go (todo : List Expr) : MetaM α := do
     match todo with
     | [] => k
@@ -138,6 +190,182 @@ partial def withExpandedAndHyps (k : MetaM α) : MetaM α := do
           go hs
   go hyps
 
+/-- Compare expressions without letting unification failures escape. This is
+    used only inside callers that already restore Meta state around the whole
+    proof attempt, so it avoids per-comparison save/restore overhead. -/
+private def isDefEqNoThrow (a b : Expr) : MetaM Bool := do
+  try
+    isDefEq a b
+  catch _ =>
+    return false
+
+/-- Compare expressions without letting unification failures escape or leak. -/
+private def isDefEqRestoring (a b : Expr) : MetaM Bool := do
+  let saved ← Meta.saveState
+  try
+    isDefEq a b
+  catch _ =>
+    return false
+  finally
+    saved.restore
+
+/-- Collect subexpressions that are useful as candidate instantiations for local
+    universal hypotheses. The target itself is included first. -/
+partial def collectCandidateTerms (e : Expr) : Array Expr :=
+  let rec visit (x : Expr) (seen : Array UInt64) (out : Array Expr) : Array UInt64 × Array Expr :=
+    let h := x.hash
+    if seen.contains h then
+      (seen, out)
+    else
+      let seen := seen.push h
+      let out := out.push x
+      match x with
+      | .app f a =>
+          let (seen, out) := visit f seen out
+          visit a seen out
+      | .lam _ t b _ =>
+          let (seen, out) := visit t seen out
+          visit b seen out
+      | .forallE _ t b _ =>
+          let (seen, out) := visit t seen out
+          visit b seen out
+      | .letE _ t v b _ =>
+          let (seen, out) := visit t seen out
+          let (seen, out) := visit v seen out
+          visit b seen out
+      | .mdata _ b =>
+          visit b seen out
+      | .proj _ _ b =>
+          visit b seen out
+      | _ => (seen, out)
+  let (_, out) := visit e #[] #[]
+  out
+
+private def collectCandidateTermsCapped (e : Expr) : Array Expr :=
+  arrayTake (collectCandidateTerms e) maxForallCandidateTerms
+
+/-- True when a forall type can be instantiated to a proposition within `fuel`
+    binders. This skips ordinary function-valued locals such as `f : α → β`. -/
+partial def forallCodomainIsProp (type : Expr) (fuel : Nat) : MetaM Bool := do
+  if fuel == 0 then
+    return false
+  if type.isForall then
+    forallCodomainIsProp type.bindingBody! (fuel - 1)
+  else
+    isProp type
+
+/-- Instantiate a local `∀` proof with bounded candidate combinations. -/
+partial def instantiateForallWithCandidatesAux (proof proofType : Expr) (candidates : Array Expr)
+    (fuel : Nat) (remaining : Nat) (attempts : Nat) : MetaM (Array Expr × Nat) := do
+  if fuel == 0 || remaining == 0 || attempts == 0 then
+    return (#[], attempts)
+  if !proofType.isForall then
+    if ← isProp proofType then
+      return (#[proof], attempts)
+    return (#[], attempts)
+
+  let domain := proofType.bindingDomain!
+  let mut facts := #[]
+  let mut attemptsLeft := attempts
+  let mut matchesHere := 0
+  for cand in candidates do
+    if facts.size >= remaining || attemptsLeft == 0 || matchesHere >= maxForallMatchesPerBinder then
+      break
+    attemptsLeft := attemptsLeft - 1
+    try
+      let candType ← inferType cand
+      if ← isDefEqRestoring candType domain then
+        matchesHere := matchesHere + 1
+        let proof' := mkApp proof cand
+        let proofType' ← inferType proof'
+        let (more, attemptsLeft') ← instantiateForallWithCandidatesAux proof' proofType' candidates
+          (fuel - 1) (remaining - facts.size) attemptsLeft
+        attemptsLeft := attemptsLeft'
+        facts := facts ++ more
+    catch _ =>
+      pure ()
+  return (facts, attemptsLeft)
+
+/-- Instantiate a local `∀` proof with bounded candidate combinations. -/
+partial def instantiateForallWithCandidates (proof proofType : Expr) (candidates : Array Expr)
+    (fuel : Nat) (remaining : Nat) : MetaM (Array Expr) := do
+  let (facts, _) ← instantiateForallWithCandidatesAux proof proofType candidates fuel remaining
+    maxForallDefEqAttempts
+  return facts
+
+/-- Instantiate local `∀` hypotheses with subterms of `target`, exposing facts
+    such as `h z : 1 ≤ |f z|` from `h : ∀ z, 1 ≤ |f z|`. -/
+def withInstantiatedForallHyps (target : Expr) (k : MetaM α) : MetaM α := do
+  let candidates := collectCandidateTermsCapped target
+  let lctx ← getLCtx
+  let mut facts := #[]
+  for decl in lctx do
+    if decl.isImplementationDetail then
+      continue
+    let proof := mkFVar decl.fvarId
+    let proofType ← inferType proof
+    if !proofType.isForall then
+      continue
+    if !(← forallCodomainIsProp proofType 4) then
+      continue
+    let remaining := maxForallInstantiatedFacts - facts.size
+    if remaining == 0 then
+      break
+    let more ← instantiateForallWithCandidates proof proofType candidates 4 remaining
+    facts := facts ++ more
+
+  let rec go (i : Nat) : MetaM α := do
+    if h : i < facts.size then
+      let fact := facts[i]
+      let factType ← inferType fact
+      withLetDecl `_atpForallInst factType fact fun _ =>
+        go (i + 1)
+    else
+      k
+  go 0
+
+/-- Find a local propositional fact whose type is definitionally equal to the
+    goal. Unlike `assumptionCore`, this also sees let-bound derived facts. -/
+private def tryExactLocalFactProof? (goal : Expr) : MetaM (Option Expr) := do
+  let lctx ← getLCtx
+  for decl in lctx do
+    if decl.isImplementationDetail then
+      continue
+    let proof := mkFVar decl.fvarId
+    let proofType ← inferType proof
+    if !(← isProp proofType) then
+      continue
+    if ← isDefEqRestoring proofType goal then
+      return some proof
+  return none
+
+/-- Instantiate local universal facts only far enough to see whether one becomes
+    exactly the current guard goal. This avoids injecting instantiated facts
+    into the whole prover context while still making `h a : f a ≠ 0` visible
+    for `h : ∀ a, f a ≠ 0`. -/
+private def tryForallInstantiatedProof? (goal : Expr) : MetaM (Option Expr) := do
+  let candidates := collectCandidateTermsCapped goal
+  let lctx ← getLCtx
+  let mut remaining := maxForallInstantiatedFacts
+  for decl in lctx do
+    if remaining == 0 then
+      break
+    if decl.isImplementationDetail then
+      continue
+    let proof := mkFVar decl.fvarId
+    let proofType ← inferType proof
+    if !proofType.isForall then
+      continue
+    if !(← forallCodomainIsProp proofType 4) then
+      continue
+    let facts ← instantiateForallWithCandidates proof proofType candidates 4 remaining
+    for fact in facts do
+      let factType ← inferType fact
+      if ← isDefEqRestoring factType goal then
+        return some fact
+    remaining := remaining - facts.size
+  return none
+
 
 /-- True iff `e` has (whnf) type exactly `Nat` or `Int`. -/
 def isNatOrInt (e : Expr) : MetaM Bool := do
@@ -161,74 +389,154 @@ def mkZeroOf (ty : Expr) : MetaM (Option Expr) := do
   finally
     saved.restore
 
-/-- Check if a hypothesis proves `0 < d` or `d > 0` (positivity).
-    Returns true if the hypothesis type matches these patterns for the given divisor.
-    NOTE: Don't use whnf here - it unfolds LT.lt to type-specific versions like Real.lt -/
-private def isPositivityHyp (hypType : Expr) (d : Expr) : MetaM Bool := do
-  -- Check for LT.lt 0 d (i.e., 0 < d)
+/-- True when an expression is definitionally the literal `1`. -/
+private def isOneOf (e : Expr) : MetaM Bool := do
+  try
+    let one ← Lean.Meta.mkNumeral (← inferType e) 1
+    isDefEqNoThrow e one
+  catch _ =>
+    return false
+
+/-- Return the final explicit argument of an application, if any. -/
+private def lastAppArg? (e : Expr) : Option Expr :=
+  e.getAppArgs.back?
+
+/-- True for the standard Real/Complex scalar domains where abs/norm lower
+    bounds prove nonzeroness. This deliberately does not trust arbitrary
+    user-defined `Norm` or `abs` instances. -/
+private def isStandardAbsNormDomain (ty : Expr) : MetaM Bool := do
+  let ty ← whnf ty
+  return ty.isConstOf ``Real || ty.isConstOf ``Complex
+
+/-- Standard ordered scalar domains where bare positivity implies nonzeroness.
+    This intentionally excludes arbitrary ordered typeclass instances. -/
+private def isStandardOrderedDomain (ty : Expr) : MetaM Bool := do
+  let ty ← whnf ty
+  return ty.isConstOf ``Real || ty.isConstOf ``Rat
+
+/-- True if `measure` is a known standard magnitude of `d`, such as `|d|`,
+    `‖d‖`, or `Complex.normSq d`. -/
+private def isStandardMagnitudeOf (measure d : Expr) : MetaM Bool := do
+  if !(← isStandardAbsNormDomain (← inferType d)) then
+    return false
+
+  let measure ← instantiateMVars measure
+  let fn := measure.getAppFn
+  let argMatches ←
+    match lastAppArg? measure with
+    | some arg => isDefEqNoThrow arg d
+    | none => pure false
+
+  if argMatches && (fn.isConstOf ``abs || fn.isConstOf ``Norm.norm) then
+    return true
+
+  -- `Complex.normSq d` elaborates through `DFunLike.coe Complex.normSq d`.
+  if argMatches && measure.getAppArgs.any (fun arg => arg.isConstOf ``Complex.normSq) then
+    return true
+
+  return false
+
+/-- Recognize hypotheses that imply `d ≠ 0` via a positive standard magnitude:
+    `0 < |d|`, `1 ≤ |d|`, `0 < ‖d‖`, `1 ≤ ‖d‖`, and symmetric `>`/`≥` forms. -/
+private def isStandardMagnitudeLowerBoundHyp (hypType d : Expr) : MetaM Bool := do
   if hypType.isAppOfArity ``LT.lt 4 then
     let args := hypType.getAppArgs
     let lhs := args[2]!
     let rhs := args[3]!
-    -- Check if lhs is 0 and rhs is our divisor
-    let lhsIsZero ← do
-      let lhsTy ← inferType lhs
-      match ← mkZeroOf lhsTy with
-      | some zero => isDefEq lhs zero
-      | none => pure false
-    if lhsIsZero && (← isDefEq rhs d) then return true
-    -- Also check GT form: d > 0 (GT.gt d 0 which is LT.lt 0 d in Mathlib)
-    pure false
-  -- Check for GT.gt d 0 (i.e., d > 0)
+    if !isSyntacticZero lhs then
+      return false
+    isStandardMagnitudeOf rhs d
   else if hypType.isAppOfArity ``GT.gt 4 then
     let args := hypType.getAppArgs
     let lhs := args[2]!
     let rhs := args[3]!
-    let rhsIsZero ← do
-      let rhsTy ← inferType rhs
-      match ← mkZeroOf rhsTy with
-      | some zero => isDefEq rhs zero
-      | none => pure false
-    if rhsIsZero && (← isDefEq lhs d) then return true
-    pure false
-  -- Check for LE.le 1 d or GE.ge d 1 (implies 0 < d for positive ordered types)
+    if !isSyntacticZero rhs then
+      return false
+    isStandardMagnitudeOf lhs d
   else if hypType.isAppOfArity ``LE.le 4 then
     let args := hypType.getAppArgs
     let lhs := args[2]!
     let rhs := args[3]!
-    -- Check if lhs is 1 and rhs is our divisor (1 ≤ d implies 0 < d)
-    let lhsIsOne ← do
-      let lhsTy ← inferType lhs
-      try
-        let one ← Lean.Meta.mkNumeral lhsTy 1
-        isDefEq lhs one
-      catch _ => pure false
-    if lhsIsOne && (← isDefEq rhs d) then return true
-    pure false
+    return (← isOneOf lhs) && (← isStandardMagnitudeOf rhs d)
   else if hypType.isAppOfArity ``GE.ge 4 then
     let args := hypType.getAppArgs
     let lhs := args[2]!
     let rhs := args[3]!
-    -- Check if rhs is 1 and lhs is our divisor (d ≥ 1 implies 0 < d)
-    let rhsIsOne ← do
-      let rhsTy ← inferType rhs
-      try
-        let one ← Lean.Meta.mkNumeral rhsTy 1
-        isDefEq rhs one
-      catch _ => pure false
-    if rhsIsOne && (← isDefEq lhs d) then return true
-    pure false
+    return (← isStandardMagnitudeOf lhs d) && (← isOneOf rhs)
   else
-    pure false
+    return false
 
-/-- Search local context for a positivity hypothesis about `d`. -/
-private def findPositivityHyp (d : Expr) : MetaM Bool := do
+/-- Recognize standard-domain hypotheses such as `0 < d`, `d > 0`, `1 ≤ d`,
+    and `d ≥ 1` as nonzero evidence. The caller is responsible for checking
+    that `d` lives in a supported ordered domain. -/
+private def isStandardPositiveBoundHyp (hypType d : Expr) : MetaM Bool := do
+  if hypType.isAppOfArity ``LT.lt 4 then
+    let args := hypType.getAppArgs
+    let lhs := args[2]!
+    let rhs := args[3]!
+    return isSyntacticZero lhs && (← isDefEqNoThrow rhs d)
+  else if hypType.isAppOfArity ``GT.gt 4 then
+    let args := hypType.getAppArgs
+    let lhs := args[2]!
+    let rhs := args[3]!
+    return (← isDefEqNoThrow lhs d) && isSyntacticZero rhs
+  else if hypType.isAppOfArity ``LE.le 4 then
+    let args := hypType.getAppArgs
+    let lhs := args[2]!
+    let rhs := args[3]!
+    return (← isOneOf lhs) && (← isDefEqNoThrow rhs d)
+  else if hypType.isAppOfArity ``GE.ge 4 then
+    let args := hypType.getAppArgs
+    let lhs := args[2]!
+    let rhs := args[3]!
+    return (← isDefEqNoThrow lhs d) && (← isOneOf rhs)
+  else
+    return false
+
+/-- Search local hypotheses for standard-domain positive bounds implying `d ≠ 0`. -/
+private def findStandardPositiveBoundHyp (d : Expr) : MetaM Bool := do
+  if !(← isStandardOrderedDomain (← inferType d)) then
+    return false
+
   let lctx ← getLCtx
   for decl in lctx do
-    if decl.isImplementationDetail then continue
+    if decl.isImplementationDetail then
+      continue
     let hypType ← inferType (mkFVar decl.fvarId)
-    if ← isPositivityHyp hypType d then
+    if ← isStandardPositiveBoundHyp hypType d then
       return true
+  return false
+
+/-- Standard magnitude lower-bound facts, recursively through conjunctions. -/
+private partial def isStandardMagnitudeLowerBoundFactType (hypType d : Expr) : MetaM Bool := do
+  if ← isStandardMagnitudeLowerBoundHyp hypType d then
+    return true
+  let hypType ← whnf hypType
+  if hypType.isAppOfArity ``And 2 then
+    let args := hypType.getAppArgs
+    return (← isStandardMagnitudeLowerBoundFactType args[0]! d) ||
+      (← isStandardMagnitudeLowerBoundFactType args[1]! d)
+  return false
+
+/-- Search local hypotheses for standard magnitude lower bounds implying `d ≠ 0`. -/
+private def findStandardMagnitudeLowerBoundHyp (d : Expr) : MetaM Bool := do
+  if !(← isStandardAbsNormDomain (← inferType d)) then
+    return false
+
+  let candidates := collectCandidateTermsCapped d
+  let lctx ← getLCtx
+  for decl in lctx do
+    if decl.isImplementationDetail then
+      continue
+    let proof := mkFVar decl.fvarId
+    let hypType ← inferType proof
+    if ← isStandardMagnitudeLowerBoundFactType hypType d then
+      return true
+    if hypType.isForall && (← forallCodomainIsProp hypType 4) then
+      let facts ← instantiateForallWithCandidates proof hypType candidates 4 maxForallInstantiatedFacts
+      for fact in facts do
+        if ← isStandardMagnitudeLowerBoundFactType (← inferType fact) d then
+          return true
   return false
 
 /-- Grind config for guard proofs (d ≠ 0, b ≤ a, 0 ≤ x, etc.).
@@ -350,7 +658,14 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
     if (← g.withContext <| g.assumptionCore) then
       return some ((← instantiateMVars m), ProvedBy.assumption)
 
-    -- 2) positivity (fast for nonnegativity/nonzeroness goals over ordered structures)
+    -- 2) exact fact lookup, including let-bound derived facts and bounded
+    -- universal instantiations that match the goal exactly.
+    if let some proof ← g.withContext <| tryExactLocalFactProof? goal then
+      return some (proof, ProvedBy.assumption)
+    if let some proof ← g.withContext <| tryForallInstantiatedProof? goal then
+      return some (proof, ProvedBy.assumption)
+
+    -- 3) positivity (fast for nonnegativity/nonzeroness goals over ordered structures)
     let solvedPos ← g.withContext do
       let t : Q(Prop) ← g.getType
       if t.approxDepth.toNat > 64 then
@@ -370,7 +685,7 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
     if solvedPos && (← g.isAssigned) then
       return some ((← instantiateMVars m), ProvedBy.positivity)
 
-    -- 3) omega (when enabled) - can be slow, but necessary for Nat/Int guards
+    -- 4) omega (when enabled) - can be slow, but necessary for Nat/Int guards
     if useOmega then
       let g? ← g.withContext <| g.falseOrByContra
       match g? with
@@ -390,7 +705,7 @@ private def tryProveProof? (goal : Expr) (useOmega : Bool := true) (useGrind : B
           if ← gFalse.isAssigned then
             return some ((← instantiateMVars m), ProvedBy.omega)
 
-    -- 4) grind (when enabled, last resort — SMT-style solver)
+    -- 5) grind (when enabled, last resort — SMT-style solver)
     if useGrind then
       -- Need a fresh mvar since the previous one may have been partially assigned
       let m' ← mkFreshExprMVar goal
@@ -566,11 +881,10 @@ Division-by-zero guard prover.
 
 SOUNDNESS: Accepts these as valid guards:
 - Direct `d ≠ 0` or `0 ≠ d` hypotheses
-- Positivity hypotheses: `0 < d`, `d > 0`, `1 ≤ d`, `d ≥ 1`
-  (for ordered types, positive implies nonzero)
+- Proofs of `d ≠ 0` derivable by Lean tactics from standard arithmetic facts
+- Standard Real/Complex magnitude lower bounds such as `1 ≤ |d|` or `1 ≤ ‖d‖`
 
-For Nat/Int divisors, it enables `omega` and `simp` (can derive nonzero from
-linear facts like `2 ≤ d` or structural facts like `Nat.succ n`).
+For Nat/Int divisors, it enables `omega` for linear facts like `2 ≤ d`.
 
 Side-effect free.
 -/
@@ -606,19 +920,15 @@ def proveDivisorSafe? (d : Expr) (useGrind : Bool := false) : MetaM (Option Prov
           if let some (_, how) ← proveCastTransport? d useGrind then
             return some how
 
-          -- For ordered targets, positivity is often easier to establish than
-          -- nonzeroness directly, especially for products, powers, and casted terms.
-          try
-            let gPos ← Lean.Meta.mkLt zero d
-            if let some _ ← tryProve? gPos omegaOk useGrind then
-              return some .positivity
-          catch _ => pure ()
+          -- Bare positive bounds are valid nonzero evidence for standard
+          -- ordered scalar domains, but not for arbitrary ordered instances.
+          if ← findStandardPositiveBoundHyp d then
+            return some .positivity
 
-          -- For non-Nat/Int types (Real, Complex, etc.), check positivity hypotheses
-          -- Since 0 < d implies d ≠ 0 in any ordered semiring
-          if !omegaOk then
-            if ← findPositivityHyp d then
-              return some .positivity
+          -- Standard magnitude lower bounds, including instantiated universal
+          -- facts such as `h z : 1 ≤ |f z|`, imply nonzeroness for Real/Complex.
+          if ← findStandardMagnitudeLowerBoundHyp d then
+            return some .structural
 
           return none
   finally

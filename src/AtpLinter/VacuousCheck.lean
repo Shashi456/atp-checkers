@@ -165,7 +165,14 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let some constInfo := env.find? declName
     | throwError "Declaration {declName} not found"
 
-  let type := constInfo.type
+  let type ←
+    match constInfo with
+    | .defnInfo info =>
+        if ← isPropValuedDeclType info.type then
+          pure info.value
+        else
+          pure info.type
+    | _ => pure constInfo.type
 
   -- Only check Prop-valued declarations (theorems)
   let isPropType ← isProp type

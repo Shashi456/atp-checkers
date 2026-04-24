@@ -246,4 +246,13 @@ def ppExprSimple (e : Expr) : MetaM String := do
         return "x"
     | _ => return s!"<expr>"
 
+/-- True when a declaration type is itself a proposition, or is the sort `Prop`
+    for zero-argument proposition definitions such as `def P : Prop := ...`. -/
+def isPropValuedDeclType (type : Expr) : MetaM Bool := do
+  if ← isProp type then
+    return true
+  match ← whnf type with
+  | .sort .zero => return true
+  | _ => return false
+
 end AtpLinter

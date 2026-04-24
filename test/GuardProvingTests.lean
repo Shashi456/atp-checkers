@@ -6,6 +6,7 @@
 -/
 
 import AtpLinter
+import TestAssertions
 import Mathlib.Data.PNat.Notation
 import Mathlib.Data.Real.Basic
 import Mathlib.Data.Rat.Cast.CharZero
@@ -53,6 +54,11 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp divGuardedNe
 
+/-- Instantiated universal nonzero facts should guard matching divisors. -/
+def divGuardedForallNe (f : ℕ → ℕ) (h : ∀ x, f x ≠ 0) (a : ℕ) : ℕ := 1 / f a
+#cov_assert_not divGuardedForallNe "Potential Division by Zero"
+#cov_assert_has divGuardedForallNe "Integer Division Truncation"
+
 -- DivisionByZero: guarded. IntDivTruncation: still warns
 def divGuardedPos (x y : Nat) (h : 0 < y) : Nat := x / y
 /--
@@ -88,6 +94,11 @@ noncomputable def divGuardedNatCast (x : ℝ) (n : Nat) (h : 0 < n) : ℝ := x /
 /-- info: ✓ GuardProving.divGuardedNatCast: No issues detected -/
 #guard_msgs in #check_atp divGuardedNatCast
 
+/-- Bare Real positivity should guard real division. -/
+noncomputable def divGuardedRealPos (x y : ℝ) (h : 0 < y) : ℝ := x / y
+/-- info: ✓ GuardProving.divGuardedRealPos: No issues detected -/
+#guard_msgs in #check_atp divGuardedRealPos
+
 /-- Conjunctive positivity hypothesis should guard product denominator. -/
 noncomputable def divGuardedProductConj (x y z : ℝ) (h : 0 < y ∧ 0 < z) : ℝ := x / (y * z)
 /-- info: ✓ GuardProving.divGuardedProductConj: No issues detected -/
@@ -117,6 +128,15 @@ noncomputable def divGuardedSquarePlusOne (x y : ℝ) : ℝ := x / (y ^ 2 + 1)
 noncomputable def divGuardedSubtypeNe (x : ℝ) (q : {q : ℝ // q ≠ 0}) : ℝ := x / q.1
 /-- info: ✓ GuardProving.divGuardedSubtypeNe: No issues detected -/
 #guard_msgs in #check_atp divGuardedSubtypeNe
+
+structure NonZeroNat where
+  val : ℕ
+  ne_zero : val ≠ 0
+
+/-- Proposition-valued structure fields should guard projected denominators. -/
+def divGuardedStructField (x : NonZeroNat) : ℕ := 1 / x.val
+#cov_assert_not divGuardedStructField "Potential Division by Zero"
+#cov_assert_has divGuardedStructField "Integer Division Truncation"
 
 /-- Positive subtypes should guard casted denominators. -/
 noncomputable def divGuardedPNat (x : ℝ) (n : ℕ+) : ℝ := x / (n : ℝ)

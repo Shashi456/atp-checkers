@@ -34,6 +34,8 @@ from .models import (
 )
 from .persistent import run_batch as run_batch_persistent
 
+LINTER_INTERNAL_ERROR_CATEGORY = "Linter Internal Error"
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -105,13 +107,20 @@ class _ResumeState:
 
     def seed_from_result_json(self, data: dict) -> None:
         self.processed += 1
+        findings = data.get("findings", [])
+        semantic_findings = [
+            f for f in findings
+            if f.get("category") != LINTER_INTERNAL_ERROR_CATEGORY
+        ]
         status = data.get("status")
+        if findings and not semantic_findings and status == "findings":
+            status = "infra_error"
         if status in self.stats:
             self.stats[status] += 1
         compile_error = bool(data.get("compile_error", status == "compile_error"))
         if compile_error:
             self.compile_errors += 1
-            if data.get("findings"):
+            if semantic_findings:
                 self.compile_errors_with_findings += 1
 
         problem_id = str(data.get("problem_id", ""))
@@ -120,7 +129,7 @@ class _ResumeState:
         elif problem_id:
             self.existing_ids.add(problem_id)
 
-        for finding in data.get("findings", []):
+        for finding in semantic_findings:
             category = finding.get("category", "unknown")
             confidence = finding.get("confidence", "maybe")
             proved_by = finding.get("provedBy") or "none"
@@ -242,7 +251,7 @@ def _load_existing_state(results_file: Path, latest_by_key: dict[str, dict]) -> 
 
 def _count_json_entries(path: Path) -> int | None:
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         return 1
@@ -316,17 +325,13 @@ class _ResultTracker:
         result.run_id = self.run_id
         self.processed += 1
 
-        # The Lean side emits per-declaration infrastructure failures (grind
-        # crashes, maxRecDepth, etc.) as findings with category "Linter
-        # Internal Error". These are not semantic findings — treat them as
-        # infra errors so they don't inflate the real finding counts.
-        internal_error_findings = [f for f in result.findings
-                                   if f.category == "Linter Internal Error"]
-        semantic_findings = [f for f in result.findings
-                             if f.category != "Linter Internal Error"]
-        if internal_error_findings and result.status == "findings" and not semantic_findings:
-            # Promote to infra_error when the ONLY findings are internal errors
+        semantic_findings = [
+            f for f in result.findings
+            if f.category != LINTER_INTERNAL_ERROR_CATEGORY
+        ]
+        if result.findings and not semantic_findings and result.status == "findings":
             result.status = "infra_error"
+
         self.stats[result.status] = self.stats.get(result.status, 0) + 1
         if result.compile_error:
             self.compile_errors += 1
@@ -455,6 +460,7 @@ def _iter_runnable_problems(
     toolchain: str,
     resume_state: _ResumeState,
 ) -> Iterator[Problem]:
+    seen_ids: set[str] = set()
     for item in items:
         if isinstance(item, ParseError):
             result = _make_load_error_result(item, dataset_source, toolchain)
@@ -465,6 +471,11 @@ def _iter_runnable_problems(
         if item.id in resume_state.existing_ids:
             continue
 
+        if item.id in seen_ids:
+            print(f"Warning: duplicate problem_id {item.id!r}; skipping later row", file=sys.stderr)
+            continue
+
+        seen_ids.add(item.id)
         yield item
 
 

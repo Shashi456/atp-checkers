@@ -8,6 +8,8 @@
 
 import AtpLinter
 import TestAssertions
+import Mathlib.Analysis.Complex.Norm
+import Mathlib.Analysis.SpecialFunctions.Complex.Log
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
 import Mathlib.Data.Real.Sqrt
@@ -57,6 +59,22 @@ theorem trueStatement : ∀ (n : Nat), n + 0 = n := by
   rfl
 /-- info: ✓ AdvancedChecker.trueStatement: No issues detected -/
 #guard_msgs in #check_atp trueStatement
+
+-- Should find counterexample hidden behind a zero-argument Prop definition.
+def falseSpecDef : Prop := ∀ n : Nat, n = n + 1
+/--
+info: Analysis of AdvancedChecker.falseSpecDef:
+──────────────────────────────────────────────────
+[ERROR] AdvancedChecker.falseSpecDef: Counterexample Found
+  Counterexample found: [n := 0] makes proposition false
+  Taxonomy: I.a - Specification Error
+  Suggestion: The instantiated proposition `0 = 0 + 1` evaluates to false
+
+──────────────────────────────────────────────────
+Summary: 1 error(s), 0 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp falseSpecDef
+#cov_assert_has falseSpecDef "Counterexample Found"
 
 -- Should find counterexample: 0 > 0 is false
 theorem falseComparison : ∀ (n : Nat), n > 0 := by sorry
@@ -598,18 +616,46 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 noncomputable def boundedReciprocal (f : ℝ → ℝ) (h : ∀ z, 1 ≤ |f z|) : ℝ → ℝ :=
   fun z => 1 / f z
 
+/-- info: ✓ AdvancedChecker.BenchmarkShape.boundedReciprocal: No issues detected -/
+#guard_msgs in #check_atp boundedReciprocal
+#cov_assert_not boundedReciprocal "Potential Division by Zero"
+
+noncomputable def boundedComplexReciprocal (f : ℂ → ℂ) (h : ∀ z, 1 ≤ ‖f z‖) : ℂ → ℂ :=
+  fun z => 1 / f z
+
+/-- info: ✓ AdvancedChecker.BenchmarkShape.boundedComplexReciprocal: No issues detected -/
+#guard_msgs in #check_atp boundedComplexReciprocal
+#cov_assert_not boundedComplexReciprocal "Potential Division by Zero"
+
+opaque badexp : ℝ → ℝ
+
+noncomputable def logBadexp (x : ℝ) : ℝ :=
+  Real.log (badexp x)
+
 /--
-info: Analysis of AdvancedChecker.BenchmarkShape.boundedReciprocal:
+info: Analysis of AdvancedChecker.BenchmarkShape.logBadexp:
 ──────────────────────────────────────────────────
-[WARNING] AdvancedChecker.BenchmarkShape.boundedReciprocal: Potential Division by Zero
-  1 / f z has no guard ensuring f z ≠ 0
+[WARNING] AdvancedChecker.BenchmarkShape.logBadexp: Analytic Domain Totalization
+  log(badexp x): Real.log requires 0 < x (returns 0 for non-positive input)
   Taxonomy: I.d - Lean Semantic Traps
-  Suggestion: Add hypothesis `h : f z ≠ 0` or `h : f z > 0`
+  Suggestion: Add guard hypothesis: 0 < badexp x
 
 ──────────────────────────────────────────────────
 Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
-#guard_msgs in #check_atp boundedReciprocal
+#guard_msgs in #check_atp logBadexp
+
+noncomputable def complexLogNoRealGuard (z : ℂ) : ℂ :=
+  Complex.log z
+
+/-- info: ✓ AdvancedChecker.BenchmarkShape.complexLogNoRealGuard: No issues detected -/
+#guard_msgs in #check_atp complexLogNoRealGuard
+
+noncomputable def sqrtComplexNormSq (z : ℂ) : ℝ :=
+  Real.sqrt (Complex.normSq z)
+
+/-- info: ✓ AdvancedChecker.BenchmarkShape.sqrtComplexNormSq: No issues detected -/
+#guard_msgs in #check_atp sqrtComplexNormSq
 
 end BenchmarkShape
 

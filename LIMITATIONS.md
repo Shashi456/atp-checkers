@@ -20,7 +20,23 @@ The semantic guard prover (`assumption` → `omega` → `grind`) reasons only fr
 
 In practice, this means:
 - It can use local hypotheses already present in the declaration.
-- All guard-checking checkers open the full binder telescope first (`forallTelescope`/`lambdaTelescope`), so every hypothesis in the declaration signature is simultaneously available regardless of binder order.
+- For theorem bodies and conclusions, guard-checking checkers open the full
+  binder telescope first (`forallTelescope`/`lambdaTelescope`), so independent
+  hypotheses in the declaration signature are available regardless of binder
+  order.
+- For binder types, guard analysis deliberately does **not** use the raw full
+  local context. Full context can be circular: when checking `n - k` in
+  `x : Fin (n - k)`, the later local `x` exposes `x.isLt : x.val < n - k`,
+  which can make `omega` prove `k ≤ n` only because the potentially unsafe type
+  was already accepted. The linter instead uses a "prop-full, data-prefix"
+  context: earlier data binders are kept, later data binders and the current
+  binder are dropped, and later propositional binders are kept only when they do
+  not depend on dropped data.
+- This safe-context rule is intentionally conservative. It can flag some Prop
+  binders whose own proposition would imply the guard, such as
+  `h : x - y = 1` implying `y ≤ x`, because using the current binder to justify
+  an expression inside its own type is not yet supported except through
+  checker-specific local rules.
 - Some checkers also mine sibling facts from positive conjunctions and set-style predicates, but this is polarity-aware: facts are shared only when the conjunction is asserted, not when it appears under negation or in an implication antecedent.
 - It does not inline helper definitions or lemmas, follow facts across declarations or modules, or recover arbitrary semantic facts established indirectly.
 

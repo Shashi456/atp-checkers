@@ -38,6 +38,60 @@ theorem actualProof : 1 + 1 = 2 := rfl
 #guard_msgs in #check_atp actualProof
 #cov_assert_not actualProof "Unsound Axiom"
 
+-- Should flag: theorem proof depends on a user Prop axiom.
+axiom dependencyAxiom : (1 : Nat) = 2
+theorem dependsOnBadAxiom : (1 : Nat) = 2 := dependencyAxiom
+/--
+info: Analysis of StructuralChecker.dependsOnBadAxiom:
+──────────────────────────────────────────────────
+[ERROR] StructuralChecker.dependsOnBadAxiom: Unsound Axiom
+  Declaration depends on user axiom(s): StructuralChecker.dependencyAxiom
+  Taxonomy: I.c - Unproven Statement
+  Suggestion: Replace user axioms with proved theorems, or treat this declaration as depending on unproven assumptions
+
+[ERROR] StructuralChecker.dependsOnBadAxiom: Counterexample Found
+  Counterexample found: [] makes proposition false
+  Taxonomy: I.a - Specification Error
+  Suggestion: The instantiated proposition `1 = 2` evaluates to false
+
+──────────────────────────────────────────────────
+Summary: 2 error(s), 0 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp dependsOnBadAxiom
+#cov_assert_has dependsOnBadAxiom "Unsound Axiom"
+#cov_assert_proved_by dependsOnBadAxiom "Unsound Axiom" "dependency"
+
+-- Should flag: theorem proof depends transitively on a user Prop axiom.
+theorem axiomWrapper : (1 : Nat) = 2 := dependencyAxiom
+theorem dependsOnAxiomWrapper : (1 : Nat) = 2 := axiomWrapper
+#cov_assert_has dependsOnAxiomWrapper "Unsound Axiom"
+#cov_assert_proved_by dependsOnAxiomWrapper "Unsound Axiom" "dependency"
+
+-- Should flag: a local declaration in a Lean-looking namespace is still user code.
+namespace Init
+
+axiom localFakeAxiom : (1 : Nat) = 2
+/--
+info: Analysis of StructuralChecker.Init.localFakeAxiom:
+──────────────────────────────────────────────────
+[ERROR] StructuralChecker.Init.localFakeAxiom: Unsound Axiom
+  Declaration uses `axiom` instead of `theorem` - this asserts without proof
+  Taxonomy: I.c - Unproven Statement
+  Suggestion: Replace with `theorem ... := by sorry` if unproven, or provide an actual proof
+
+[ERROR] StructuralChecker.Init.localFakeAxiom: Counterexample Found
+  Counterexample found: [] makes proposition false
+  Taxonomy: I.a - Specification Error
+  Suggestion: The instantiated proposition `1 = 2` evaluates to false
+
+──────────────────────────────────────────────────
+Summary: 2 error(s), 0 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp localFakeAxiom
+#cov_assert_has localFakeAxiom "Unsound Axiom"
+
+end Init
+
 -- ============================================================
 -- Vacuous Hypotheses
 -- ============================================================

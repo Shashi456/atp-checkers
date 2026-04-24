@@ -155,13 +155,22 @@ theorem allZero_zero_lt_zero : (0 : AllZero) < (0 : AllZero) := trivial
 /--
 Even with a hypothesis `h : 0 < (1 : AllZero)`, divisor is still defeq to 0.
 
-Actual: no warnings. The AllZero HDiv instance ignores its arguments, so the checker
-sees no real division risk here. (This may be a false negative — the guard prover does
-not currently reject pathological LT instances for non-Nat/Int types.)
+The checker must not treat arbitrary `<` hypotheses on nonstandard types as
+proofs of nonzeroness. Here `1 : AllZero` is definitionally zero.
 -/
 def allZero_badLtGuard (x : AllZero) (h : (0 : AllZero) < (1 : AllZero)) : AllZero :=
   x / (1 : AllZero)
-/-- info: ✓ PrefixScope.allZero_badLtGuard: No issues detected -/
+/--
+info: Analysis of PrefixScope.allZero_badLtGuard:
+──────────────────────────────────────────────────
+[WARNING] PrefixScope.allZero_badLtGuard: Potential Division by Zero
+  x / 1 has no guard ensuring 1 ≠ 0
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: Add hypothesis `h : 1 ≠ 0` or `h : 1 > 0`
+
+──────────────────────────────────────────────────
+Summary: 0 error(s), 1 warning(s), 0 info(s)
+-/
 #guard_msgs in #check_atp allZero_badLtGuard
 
 

@@ -229,6 +229,31 @@ class TestLoadJsonl(unittest.TestCase):
 
         self.assertEqual(3, len(errors))  # missing_code, bad_code_type, invalid JSON
 
+    def test_non_object_jsonl_row_is_parse_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "non_object.jsonl"
+            p.write_text(
+                '["array","not","dict"]\n'
+                '{"id":"ok","lean_code":"def x := 1"}\n',
+                encoding="utf-8",
+            )
+            problems, errors = load_jsonl(p)
+
+        self.assertEqual(1, len(problems))
+        self.assertEqual("ok", problems[0].id)
+        self.assertEqual(1, len(errors))
+        self.assertIn("expected object, got list", errors[0].error)
+
+    def test_jsonl_with_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "bom.jsonl"
+            p.write_bytes(b'\xef\xbb\xbf{"id":"p1","lean_code":"def f : Nat := 1"}\n')
+            problems, errors = load_jsonl(p)
+
+        self.assertEqual(1, len(problems))
+        self.assertEqual("p1", problems[0].id)
+        self.assertEqual(0, len(errors))
+
 
 # ---------------------------------------------------------------------------
 # load_json tests
@@ -273,6 +298,16 @@ class TestLoadJson(unittest.TestCase):
         self.assertEqual(2, len(problems))
         self.assertEqual("thm1", problems[0].id)
         self.assertEqual("p2", problems[1].id)
+
+    def test_json_array_with_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "bom.json"
+            p.write_bytes(b'\xef\xbb\xbf[{"id":"p1","lean_code":"def a := 1"}]')
+            problems, errors = load_json(p)
+
+        self.assertEqual(1, len(problems))
+        self.assertEqual("p1", problems[0].id)
+        self.assertEqual(0, len(errors))
 
 
 # ---------------------------------------------------------------------------

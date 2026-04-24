@@ -388,11 +388,27 @@ def analyzeDecl (declName : Name) (hasOtherFindings : Bool := false)
   let some constInfo := env.find? declName
     | throwError "Declaration {declName} not found"
 
-  -- Check gates
-  if !shouldRun declName constInfo hasOtherFindings then
+  -- Check gates. In addition to the usual expensive-search gates, allow
+  -- zero-argument proposition definitions (`def P : Prop := ...`) because
+  -- these are theorem-like statements hidden behind a definition body.
+  let shouldRunDecl ←
+    if shouldRun declName constInfo hasOtherFindings then
+      pure true
+    else
+      match constInfo with
+      | .defnInfo info => isPropValuedDeclType info.type
+      | _ => pure false
+  if !shouldRunDecl then
     return { declName, counterexample := none, wasSkipped := true }
 
-  let type := constInfo.type
+  let type ←
+    match constInfo with
+    | .defnInfo info =>
+        if ← isPropValuedDeclType info.type then
+          pure info.value
+        else
+          pure info.type
+    | _ => pure constInfo.type
 
   -- Only check Prop-valued declarations
   let isPropType ← isProp type

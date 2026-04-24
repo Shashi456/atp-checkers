@@ -26,6 +26,9 @@ def covDivTN (a b : Nat) (h : b ≠ 0) : Nat := a / b
 def covDivFP_literal (a : Nat) : Nat := a / 2
 #cov_assert_not covDivFP_literal "Potential Division by Zero"
 
+noncomputable def covDivTN_realPositive (a b : ℝ) (h : 0 < b) : ℝ := a / b
+#cov_assert_not covDivTN_realPositive "Potential Division by Zero"
+
 -- ============================================================
 -- Nat Subtraction (TP / TN / FP)
 -- ============================================================

@@ -78,8 +78,12 @@ def resolve_row(
         ResolvedRow with id, lean_code, natural_language, strategy, metadata.
 
     Raises:
+        TypeError: If the row is not a mapping.
         ValueError: If no recognizable code field is found.
     """
+    if not isinstance(row, dict):
+        raise TypeError(f"Row {row_index}: expected object, got {type(row).__name__}")
+
     consumed: set[str] = set()
 
     # --- ID ---
@@ -208,7 +212,7 @@ def iter_jsonl(
 
     first_strategy = None
 
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         for line_num, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
@@ -225,7 +229,7 @@ def iter_jsonl(
 
             try:
                 resolved = resolve_row(data, row_index=line_num, header=header)
-            except ValueError as e:
+            except (TypeError, ValueError) as e:
                 err = ParseError(line_num, str(e), line[:200])
                 if on_error == "raise":
                     raise ValueError(f"{path}:{line_num}: {err.error}") from e
@@ -241,7 +245,7 @@ def iter_jsonl(
 
 def count_jsonl_entries(path: Path) -> int:
     """Count non-empty JSONL lines for progress reporting."""
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         return sum(1 for line in f if line.strip())
 
 
@@ -277,7 +281,7 @@ def iter_json(
     if source is None:
         source = path.stem
 
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:
@@ -297,7 +301,7 @@ def iter_json(
 
         try:
             resolved = resolve_row(row, row_index=idx, header=header)
-        except ValueError as e:
+        except (TypeError, ValueError) as e:
             yield ParseError(idx + 1, str(e), str(row)[:200])
             continue
 
@@ -349,7 +353,7 @@ def iter_lean_dir(
     loaded = 0
     for idx, lean_file in enumerate(lean_files):
         try:
-            lean_code = lean_file.read_text(encoding="utf-8")
+            lean_code = lean_file.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError) as e:
             yield ParseError(idx + 1, f"Failed to read {lean_file.name}: {e}", "")
             continue
@@ -460,7 +464,7 @@ def iter_hf(
             resolved = resolve_row(dict(row), row_index=idx, header=header)
             strategy_counts[resolved.strategy] = strategy_counts.get(resolved.strategy, 0) + 1
             yield _resolved_to_problem(resolved, source)
-        except ValueError as e:
+        except (TypeError, ValueError) as e:
             yield ParseError(idx + 1, str(e), str(dict(row))[:200])
 
     for strat, count in sorted(strategy_counts.items()):

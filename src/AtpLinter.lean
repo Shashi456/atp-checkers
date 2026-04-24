@@ -91,6 +91,7 @@ def analyzeDecl (declName : Name) : MetaM FullAnalysis := do
     intToNatResult.conversions.any (fun c => c.kind == .toNat && c.guardEvidence.isNone) ||
     moduloResult.modulos.any (·.guardEvidence.isNone) ||
     (axiomResult.isUserAxiom && axiomResult.isProp) ||
+    !axiomResult.depAxioms.isEmpty ||
     vacuousResult.isVacuous ||
     !unusedBinderResult.unusedBinders.isEmpty ||
     !castTruncResult.patterns.isEmpty ||
@@ -253,6 +254,19 @@ def toFindings (analysis : FullAnalysis) : MetaM (Array LintFinding) := do
       suggestion := "Replace with `theorem ... := by sorry` if unproven, or provide an actual proof"
       confidence := .proven
       provedBy := some "structural"
+    }
+
+  if !analysis.axiomResult.depAxioms.isEmpty then
+    let axiomNames := analysis.axiomResult.depAxioms.toList.map (fun n => toString n)
+    let axiomList := String.intercalate ", " axiomNames
+    findings := findings.push {
+      category := .unsoundAxiom
+      severity := .error
+      declName := analysis.declName
+      message := s!"Declaration depends on user axiom(s): {axiomList}"
+      suggestion := "Replace user axioms with proved theorems, or treat this declaration as depending on unproven assumptions"
+      confidence := .proven
+      provedBy := some "dependency"
     }
 
   -- Vacuous theorem findings

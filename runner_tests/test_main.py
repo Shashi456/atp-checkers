@@ -6,11 +6,15 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 from runner.__main__ import (
+    _count_json_entries,
     _enforce_toolchain_consistency,
+    _iter_runnable_problems,
     _load_existing_state,
     _ResultTracker,
+    _ResumeState,
     _scan_existing_results,
 )
+from runner.models import Finding, LintResult, Problem, Provenance
 
 
 class ResumeStateTests(unittest.TestCase):
@@ -60,6 +64,26 @@ class ResumeStateTests(unittest.TestCase):
                     "provenance": {"lean_toolchain": "lean/v1", "timestamp": "t"},
                     "metadata": {},
                 },
+                {
+                    "problem_id": "p3",
+                    "source": "src",
+                    "status": "findings",
+                    "findings": [
+                        {
+                            "category": "Linter Internal Error",
+                            "severity": "INFO",
+                            "declaration": "d",
+                            "message": "Linter internal error: maxRecDepth",
+                            "suggestion": None,
+                            "confidence": "maybe",
+                            "provedBy": None,
+                        }
+                    ],
+                    "error_message": None,
+                    "duration_ms": 3,
+                    "provenance": {"lean_toolchain": "lean/v1", "timestamp": "t"},
+                    "metadata": {},
+                },
             ]
             results_file.write_text(
                 "\n".join(json.dumps(row) for row in rows) + "\n",
@@ -70,11 +94,11 @@ class ResumeStateTests(unittest.TestCase):
             state = _load_existing_state(results_file, latest_by_key)
 
         self.assertEqual({"lean/v1"}, seen_toolchains)
-        self.assertEqual({"p1", "p2"}, state.existing_ids)
-        self.assertEqual(3, state.processed)
+        self.assertEqual({"p1", "p2", "p3"}, state.existing_ids)
+        self.assertEqual(4, state.processed)
         self.assertEqual(1, state.stats["ok"])
         self.assertEqual(1, state.stats["findings"])
-        self.assertEqual(1, state.stats["infra_error"])
+        self.assertEqual(2, state.stats["infra_error"])
         self.assertEqual(1, state.compile_errors)
         self.assertEqual(1, state.compile_errors_with_findings)
         self.assertEqual(1, state.total_findings)
@@ -120,6 +144,13 @@ class ResumeStateTests(unittest.TestCase):
     def test_enforce_toolchain_consistency_passes_when_empty(self):
         # Empty seen set (no prior results) should never fire.
         _enforce_toolchain_consistency("lean/v1", set(), allow_mismatch=False)
+
+    def test_count_json_entries_strips_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dataset.json"
+            path.write_bytes(b'\xef\xbb\xbf[{"id":"p1"},{"id":"p2"}]')
+
+            self.assertEqual(2, _count_json_entries(path))
 
     def test_load_existing_state_dedupes_latest_row_per_problem(self):
         with tempfile.TemporaryDirectory() as td:
@@ -219,6 +250,95 @@ class ResumeStateTests(unittest.TestCase):
         self.assertEqual(1, tracker.compile_errors_with_findings)
         self.assertEqual(4, tracker.total_findings)
         self.assertEqual(4, tracker.by_confidence["maybe"])
+
+    def test_result_tracker_promotes_linter_internal_errors_to_infra(self):
+        with tempfile.TemporaryDirectory() as td:
+            results_fh = io.StringIO()
+            tracker = _ResultTracker(1, results_fh, Path(td))
+            result = LintResult(
+                problem_id="p",
+                source="src",
+                status="findings",
+                findings=[
+                    Finding(
+                        category="Linter Internal Error",
+                        severity="error",
+                        declaration="bad_decl",
+                        message="maximum recursion depth has been reached",
+                    )
+                ],
+                error_message=None,
+                duration_ms=1,
+                provenance=Provenance(lean_toolchain="lean/v1", timestamp="t"),
+            )
+
+            tracker.on_result(result)
+            row = json.loads(results_fh.getvalue())
+
+        self.assertEqual("infra_error", row["status"])
+        self.assertEqual(0, tracker.stats["findings"])
+        self.assertEqual(1, tracker.stats["infra_error"])
+        self.assertEqual(0, tracker.total_findings)
+        self.assertNotIn("Linter Internal Error", tracker.by_category)
+
+    def test_result_tracker_excludes_linter_internal_errors_from_semantic_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            results_fh = io.StringIO()
+            tracker = _ResultTracker(1, results_fh, Path(td))
+            result = LintResult(
+                problem_id="p",
+                source="src",
+                status="findings",
+                findings=[
+                    Finding(
+                        category="Potential Division by Zero",
+                        severity="warning",
+                        declaration="bad_div",
+                        message="unguarded denominator",
+                    ),
+                    Finding(
+                        category="Linter Internal Error",
+                        severity="error",
+                        declaration="bad_decl",
+                        message="maximum recursion depth has been reached",
+                    ),
+                ],
+                error_message=None,
+                duration_ms=1,
+                provenance=Provenance(lean_toolchain="lean/v1", timestamp="t"),
+            )
+
+            tracker.on_result(result)
+            row = json.loads(results_fh.getvalue())
+
+        self.assertEqual("findings", row["status"])
+        self.assertEqual(1, tracker.stats["findings"])
+        self.assertEqual(0, tracker.stats["infra_error"])
+        self.assertEqual(1, tracker.total_findings)
+        self.assertEqual(1, tracker.by_category["Potential Division by Zero"]["total"])
+        self.assertNotIn("Linter Internal Error", tracker.by_category)
+
+    def test_iter_runnable_problems_skips_duplicate_ids_in_current_stream(self):
+        with tempfile.TemporaryDirectory() as td:
+            tracker = _ResultTracker(2, io.StringIO(), Path(td))
+            items = [
+                Problem("p1", "src", "def f : Nat := 1", {}),
+                Problem("p1", "src", "def g : Nat := 2", {}),
+            ]
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                runnable = list(_iter_runnable_problems(
+                    items,
+                    tracker,
+                    "dataset",
+                    "lean/v1",
+                    _ResumeState(),
+                ))
+
+        self.assertEqual(1, len(runnable))
+        self.assertEqual("p1", runnable[0].id)
+        self.assertIn("duplicate problem_id 'p1'", stderr.getvalue())
 
 
 if __name__ == "__main__":

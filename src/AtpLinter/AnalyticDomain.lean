@@ -64,12 +64,27 @@ def isSyntacticNonNegLiteral (e : Expr) : Bool :=
   | .app (.const ``One.one _) _ => true
   | _ => false
 
+/-- Known standard magnitude functions that return non-negative values. -/
+def isStandardMagnitudeName (name : Name) : Bool :=
+  name == ``abs ||
+  name == ``Norm.norm ||
+  name == ``NNNorm.nnnorm ||
+  name == ``Complex.normSq
+
+/-- `Complex.normSq z` often elaborates through coercions and unfolds under
+    `whnf`, so recognize it before normalization. -/
+def containsComplexNormSqConst (e : Expr) : Bool :=
+  e.getAppFn.isConstOf ``Complex.normSq ||
+  e.getAppArgs.any (fun arg => arg.isConstOf ``Complex.normSq)
+
 /-- Check if an expression is obviously non-negative (suppression heuristic) -/
 def isObviouslyNonNeg (e : Expr) : MetaM Bool := do
   -- First check syntactic literals (fast, no whnf needed)
   if isSyntacticNonNegLiteral e then return true
+  if containsComplexNormSqConst e then return true
 
   let e ← whnf e
+  if containsComplexNormSqConst e then return true
 
   -- Known positive constants are certainly non-negative.
   if let .const name _ := e then
@@ -97,10 +112,9 @@ def isObviouslyNonNeg (e : Expr) : MetaM Bool := do
   if let .const name _ := fn then
     let nameStr := name.toString
     if nameStr == "Real.sqrt" || nameStr == "NNReal.sqrt" then return true
-    if containsSubstr nameStr "exp" then return true
-    if containsSubstr nameStr "abs" then return true
-    if containsSubstr nameStr "norm" then return true
-    if containsSubstr nameStr "nnnorm" then return true
+    if nameStr == "Real.exp" then return true
+    if isStandardMagnitudeName name then return true
+    if e.getAppArgs.any (fun arg => arg.isConstOf ``Complex.normSq) then return true
 
   return false
 
@@ -126,7 +140,7 @@ def isObviouslyPos (e : Expr) : MetaM Bool := do
   -- exp x is always positive
   let fn := e.getAppFn
   if let .const name _ := fn then
-    if containsSubstr name.toString "exp" then return true
+    if name.toString == "Real.exp" then return true
 
   return false
 
@@ -260,7 +274,6 @@ def isSqrtName (name : Name) : Bool :=
 def isLogName (name : Name) : Bool :=
   match name with
   | .str (.str .anonymous "Real") "log" => true
-  | .str (.str .anonymous "Complex") "log" => true
   | _ => false
 
 /-- Find analytic domain issues in an expression -/
