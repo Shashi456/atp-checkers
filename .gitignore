@@ -19,6 +19,17 @@ local/
 __pycache__/
 *.pyc
 
+# Editor / agent local settings
+.claude/
+
 # macOS
 .DS_Store
 *.jsonl
+
+# Working-tree artifacts (not release material)
+/decontaminated_fewshot_plan.md
+/minif2f_examples_codex.json
+/regression_report.md
+/run_results/
+/results_experimental/
+/worktrees/

@@ -72,6 +72,10 @@ Examples:
         help="Append to existing results.jsonl instead of failing if it exists")
     parser.add_argument("--skip-existing", action="store_true",
         help="Skip problems already in results.jsonl (for resuming interrupted runs)")
+    parser.add_argument("--allow-toolchain-mismatch", action="store_true",
+        help="Opt out of the toolchain-consistency check when --append or --skip-existing "
+             "is used against results.jsonl produced under a different Lean toolchain. "
+             "By default such a mismatch is a fatal error to avoid silently mixing results.")
     parser.add_argument("--backend", type=str, choices=["persistent", "subprocess"],
         default="subprocess",
         help="Execution backend (default: subprocess, resolves lake env once then invokes lean directly; "
@@ -155,12 +159,16 @@ def _resolve_header(args) -> str | None:
     return args.header_file.read_text(encoding="utf-8")
 
 
-def _load_existing_state(results_file: Path, toolchain: str) -> _ResumeState:
-    state = _ResumeState()
-    if not results_file.exists():
-        return state
-    print(f"Loading existing results from {results_file}...")
+def _scan_existing_results(results_file: Path) -> tuple[dict[str, dict], set[str]]:
+    """Read results.jsonl once, returning (latest_row_by_problem_id, seen_toolchains).
+
+    Used both for --skip-existing (to seed stats and dedupe ids) and for the
+    toolchain-consistency check under --append / --skip-existing.
+    """
     latest_by_key: dict[str, dict] = {}
+    seen_toolchains: set[str] = set()
+    if not results_file.exists():
+        return latest_by_key, seen_toolchains
     with open(results_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -170,24 +178,61 @@ def _load_existing_state(results_file: Path, toolchain: str) -> _ResumeState:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-
             problem_id = data.get("problem_id")
             if problem_id is None:
                 continue
             latest_by_key[str(problem_id)] = data
+            prov = data.get("provenance") or {}
+            tc = prov.get("lean_toolchain")
+            if tc:
+                seen_toolchains.add(tc)
+    return latest_by_key, seen_toolchains
 
-    seen_toolchains = set()
+
+def _enforce_toolchain_consistency(
+    toolchain: str, seen_toolchains: set[str], *, allow_mismatch: bool
+) -> None:
+    """Refuse to mix results from different toolchains unless explicitly allowed.
+
+    Fires when results.jsonl already contains rows whose provenance.lean_toolchain
+    differs from the current run's toolchain. This matches the contract stated in
+    LIMITATIONS.md: runner refuses to mix results from different versions.
+    """
+    if not seen_toolchains:
+        return
+    mismatched = toolchain not in seen_toolchains
+    mixed = len(seen_toolchains) > 1
+    if not (mismatched or mixed):
+        return
+    if mismatched:
+        msg = (
+            f"Toolchain mismatch: current run is '{toolchain}' but existing results "
+            f"were produced under {sorted(seen_toolchains)}."
+        )
+    else:
+        msg = f"Existing results already contain mixed toolchains: {sorted(seen_toolchains)}."
+    if allow_mismatch:
+        print(f"Warning: {msg} (proceeding because --allow-toolchain-mismatch is set)",
+              file=sys.stderr)
+        return
+    print(
+        f"Error: {msg}\n"
+        f"  Refusing to mix toolchains. Options:\n"
+        f"    - write to a fresh --output directory, or\n"
+        f"    - re-run with --allow-toolchain-mismatch to override.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def _load_existing_state(results_file: Path, latest_by_key: dict[str, dict]) -> _ResumeState:
+    state = _ResumeState()
+    if not latest_by_key:
+        return state
+    print(f"Loading existing results from {results_file}...")
     for data in latest_by_key.values():
         state.seed_from_result_json(data)
-        prov = data.get("provenance", {})
-        if "lean_toolchain" in prov:
-            seen_toolchains.add(prov["lean_toolchain"])
-
     print(f"Found {len(state.existing_ids)} already-processed problems")
-    if seen_toolchains and toolchain not in seen_toolchains:
-        print(f"Warning: toolchain mismatch with existing results: {seen_toolchains}", file=sys.stderr)
-    if len(seen_toolchains) > 1:
-        print(f"Warning: existing results contain mixed toolchains: {seen_toolchains}", file=sys.stderr)
     return state
 
 
@@ -491,8 +536,17 @@ def main():
         print(f"Error: {results_file} already exists. Use --append or --skip-existing.", file=sys.stderr)
         sys.exit(1)
 
+    # Scan existing results once, both to seed resume state (skip-existing) and
+    # to enforce toolchain consistency (append or skip-existing).
+    latest_by_key, seen_toolchains = _scan_existing_results(results_file)
+    if (args.append or args.skip_existing) and results_file.exists():
+        _enforce_toolchain_consistency(
+            toolchain, seen_toolchains, allow_mismatch=args.allow_toolchain_mismatch
+        )
     resuming = args.skip_existing and results_file.exists()
-    resume_state = _load_existing_state(results_file, toolchain) if resuming else _ResumeState()
+    resume_state = (
+        _load_existing_state(results_file, latest_by_key) if resuming else _ResumeState()
+    )
 
     items, dataset_source, total_hint = _open_dataset_stream(args, header)
     run_started_at = datetime.now(timezone.utc).isoformat()

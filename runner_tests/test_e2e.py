@@ -12,7 +12,6 @@ from pathlib import Path
 from runner.executor import lint_problem, wrap_with_linter
 from runner.models import Problem
 
-
 WORKSPACE = Path(__file__).resolve().parent.parent
 BUILT = (WORKSPACE / ".lake" / "build" / "lib").exists()
 

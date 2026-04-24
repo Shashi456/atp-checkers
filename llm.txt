@@ -13,8 +13,8 @@ Release identity: `atp-checkers`. Internal Lean namespace: `AtpLinter`.
 ```
 atp-checkers/
 ├── lakefile.lean              # Lake build config (package atp-checkers)
-├── lake-manifest.json         # Dependencies (mathlib v4.24.0)
-├── lean-toolchain             # leanprover/lean4:v4.24.0
+├── lake-manifest.json         # Dependencies (mathlib v4.28.0, plausible v4.28.0)
+├── lean-toolchain             # leanprover/lean4:v4.28.0 (source of truth)
 ├── Main.lean                  # CLI entry point
 ├── src/
 │   ├── AtpLinter.lean         # Main module, #check_atp command, JSON pipeline
@@ -35,13 +35,14 @@ atp-checkers/
 │       ├── ExponentTruncation.lean
 │       └── AnalyticDomain.lean
 ├── test/
-│   ├── AllTests.lean          # Hub: imports all 7 gating test modules
-│   └── ...                    # 7 gating + 3 demo test files
+│   ├── AllTests.lean          # Hub: imports all gating test modules
+│   ├── TestAssertions.lean    # #cov_assert_* DSL (compile-time gating)
+│   └── ...                    # 7 gating + 4 demo test files
 ├── runner/                    # Python batch execution pipeline
-│   ├── __main__.py            # CLI entrypoint
+│   ├── __main__.py            # CLI entrypoint, orchestration, resume state
 │   ├── executor.py            # Default backend: subprocess per problem (direct lean)
 │   ├── persistent.py          # Alternative backend: persistent REPL worker pool
-│   ├── parse.py               # Shared parsing helpers (ATP sentinels)
+│   ├── preamble.py            # Import-bundle construction + normalization for caching
 │   ├── data_loader.py         # Dataset loading (JSONL, JSON, lean dir, HuggingFace)
 │   └── models.py              # Data models (Problem, Finding, LintResult)
 ├── runner_tests/              # Python runner unit + e2e tests
@@ -52,9 +53,9 @@ atp-checkers/
 ### Build & Test
 
 ```bash
-lake build                    # Build linter (36 jobs)
-lake build AtpLinterTest      # Run gating tests
-lake build AtpLinterDemo      # Run demo tests (non-gating)
+lake build                    # Build linter (~2958 jobs including Mathlib; ~5 min with cache)
+lake build AtpLinterTest      # Run gating tests (compile-time #cov_assert_* assertions)
+lake build AtpLinterDemo      # Run demo tests (non-gating, diagnostic output)
 
 # Default: subprocess backend (resolves lean env once, direct invocation)
 python3 -m runner datasets/examples/minimal_no_mathlib.jsonl \
@@ -205,7 +206,11 @@ Pretty-print expressions at discovery time (when binders are in scope). Store as
 
 ### Skip Proof Terms
 
-Only analyze type signatures for Prop declarations. Proof terms are enormous and contain incidental operations.
+Only analyze type signatures for Prop declarations. Proof terms are enormous and contain incidental operations. Non-Prop definitions do inspect the value body.
+
+### Polarity-Aware Guard Mining
+
+Positive conjuncts like `x ≠ 0 ∧ 1/x = x` contribute `x ≠ 0` to the guard context. Under negation or in an implication antecedent (`¬ (x ≠ 0 ∧ …)`, `(x ≠ 0 ∧ …) → True`) the same conjunct is **not** mined, so guard warnings still fire. `withExpandedAndHyps` in `SemanticGuards.lean` handles this by walking only asserted prop hypotheses. See `test/GuardProvingTests.lean` → `negatedConjunctionDiv`, `antecedentConjunctionDiv`, `negatedConjunctionInv` for the gating tests.
 
 ### Deduplication
 
@@ -237,11 +242,20 @@ and parse `ATP_LINT:` / `ATP_DONE:` sentinels from output.
   "problem_id": "...",
   "source": "...",
   "status": "ok|findings|compile_error|timeout|infra_error",
-  "findings": [{"category":"...","confidence":"proven","provedBy":"omega",...}],
+  "findings": [{"category":"...","severity":"WARNING","declaration":"...",
+                "message":"...","suggestion":"...",
+                "confidence":"proven","provedBy":"omega"}],
+  "error_message": null,
   "duration_ms": 1234,
-  "provenance": {"lean_toolchain":"...","timestamp":"..."}
+  "provenance": {"lean_toolchain":"leanprover/lean4:v4.28.0","timestamp":"..."},
+  "compile_error": false,
+  "compile_error_message": null,
+  "metadata": {"natural_language":"...", "...":"..."}
 }
 ```
+
+Rows can have `status = "findings"` and `compile_error = true` simultaneously
+when the linter emitted findings despite unrelated compile errors in the file.
 
 **Note:** Problems with `import Mathlib` require a pre-built Mathlib in the workspace. Use `minimal_no_mathlib.jsonl` for self-contained smoke tests.
 

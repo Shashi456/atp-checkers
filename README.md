@@ -80,7 +80,7 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 
 | Flag | Description |
 |------|-------------|
-| `dataset` | Path to input JSONL file |
+| `dataset` | Dataset source — a file path (`jsonl`/`json`), a directory of `.lean` files (`lean`), or a HuggingFace repo ID (`hf`). Interpretation is controlled by `--format`. |
 | `--workspace, -w` | Path to built Lean workspace (must contain `.lake` build artifacts) |
 | `--output, -o` | Output directory (created if needed) |
 
@@ -88,6 +88,9 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--format, -f` | `jsonl` | Dataset format: `jsonl`, `json`, `lean` (directory of `.lean` files), or `hf` (HuggingFace repo ID) |
+| `--split` | auto | Split to use for HuggingFace datasets (prefers `test`, then the first available) |
+| `--header-file` | — | Path to a `.lean` file whose contents are prepended to every problem (useful for project-wide imports or open namespaces) |
 | `--backend` | `subprocess` | Execution backend: `subprocess` (default, resolves lean env once) or `persistent` (REPL, requires `lake build repl`) |
 | `--timeout` | 30 | Timeout per problem in seconds |
 | `--workers, -j` | 1 | Number of parallel workers |
@@ -99,6 +102,12 @@ The default `subprocess` backend resolves the workspace Lean environment once
 and invokes the Lean binary directly per problem, with import-bundle caching
 to avoid repeated import cost. Use `--backend persistent` for REPL-based
 execution (requires `lake build repl`).
+
+> **Concurrency note:** `--workers > 1` parallelizes problems within a single
+> runner process safely. Do **not** point two independent runner processes at
+> the same `--output` directory — the runner does not take a filesystem lock
+> on `results.jsonl`, so concurrent appenders can interleave records. Use one
+> output directory per runner, or merge post-hoc.
 
 **Extra Lean search paths:** For datasets that depend on modules outside the
 workspace (e.g., a local Mathlib fork or companion repo), set the
@@ -144,7 +153,7 @@ Each line of `results.jsonl` is a JSON object:
   "error_message": null,
   "duration_ms": 1823,
   "provenance": {
-    "lean_toolchain": "leanprover/lean4:v4.29.0-rc6",
+    "lean_toolchain": "leanprover/lean4:v4.28.0",
     "timestamp": "2026-02-23T12:42:44.125493+00:00"
   },
   "compile_error": false,
@@ -221,7 +230,7 @@ metadata, and structured findings that can be directly embedded in prompts.
 ```
 atp-checkers/
 ├── lakefile.lean              # Build config
-├── lean-toolchain             # Lean 4 v4.29.0-rc6
+├── lean-toolchain             # Lean 4 v4.28.0 (source of truth)
 ├── Main.lean                  # CLI entry point
 ├── src/AtpLinter/             # 13 checker modules + core infrastructure
 ├── test/                      # 7 gating + 3 demo test suites
@@ -298,3 +307,7 @@ analysis can and cannot catch in Lean formalizations, including:
 
 GitHub Actions workflow at `.github/workflows/lean.yml` runs `lake build` and
 `lake build AtpLinterTest`, plus Python runner unit tests, on push.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

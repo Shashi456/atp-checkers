@@ -84,15 +84,19 @@ This avoids overwhelming theorem analysis with proof noise, but it also means th
 ### 7. Lean version coupling
 
 The linter is built against a specific Lean toolchain and Mathlib version
-(currently Lean 4 v4.24.0, Mathlib v4.24.0). Code written for different Lean
+(currently Lean 4 v4.28.0, Mathlib v4.28.0; see `lean-toolchain` and
+`lakefile.lean` for the source of truth). Code written for different Lean
 versions may:
 
 - Use different API names (triggering compile errors, not linter findings)
 - Have different default behaviors for the same operations
 - Rely on Mathlib lemmas that changed semantics across versions
 
-The runner enforces toolchain consistency and will refuse to mix results from
-different versions.
+The runner enforces toolchain consistency: under `--append` or `--skip-existing`,
+if the existing `results.jsonl` was produced with a different Lean toolchain
+(or already contains a mix), the runner exits with an error rather than
+silently mixing results. Pass `--allow-toolchain-mismatch` to opt out, or write
+to a fresh `--output` directory.
 
 ## What the linter is good at
 

@@ -50,7 +50,7 @@ def _cache_root(workspace: Path) -> Path:
 
 
 def _normalize_extra_lean_paths(extra_paths: object) -> tuple[str, ...]:
-    if not isinstance(extra_paths, (list, tuple)):
+    if not isinstance(extra_paths, list | tuple):
         return ()
     normalized: list[str] = []
     for item in extra_paths:
@@ -103,7 +103,7 @@ def _ensure_import_bundle(
         return None
 
     lean_path = lean_cmd[0]
-    resolved_lean = lean_path if os.path.isabs(lean_path) else shutil.which(lean_path)
+    resolved_lean = lean_path if Path(lean_path).is_absolute() else shutil.which(lean_path)
     if not resolved_lean:
         log.debug("Skipping import-bundle cache: could not resolve Lean binary %r", lean_path)
         return None
@@ -154,8 +154,7 @@ def _ensure_import_bundle(
                 [resolved_lean, "-o", str(olean_path), str(source_path)],
                 cwd=workspace,
                 env=lean_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True, check=False,
             )
             if proc.returncode != 0:

@@ -6,14 +6,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from runner.data_loader import (
-    resolve_row,
-    load_jsonl,
-    load_json,
-    load_lean_dir,
     load_hf,
-    ResolvedRow,
+    load_json,
+    load_jsonl,
+    load_lean_dir,
+    resolve_row,
 )
-
 
 # ---------------------------------------------------------------------------
 # resolve_row tests

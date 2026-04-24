@@ -5,10 +5,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 import runner.executor as executor_module
-from runner.executor import _ensure_import_bundle, _resolve_direct_lean, lint_problem, run_batch, wrap_with_linter
+from runner.executor import (
+    _ensure_import_bundle,
+    _resolve_direct_lean,
+    lint_problem,
+    run_batch,
+    wrap_with_linter,
+)
 from runner.models import (
-    LintResult, Problem, Provenance,
-    parse_lint_output, has_done_sentinel,
+    LintResult,
+    Problem,
+    Provenance,
+    has_done_sentinel,
+    parse_lint_output,
 )
 from runner.preamble import split_preamble
 
@@ -88,8 +97,9 @@ class ExecutorParsingTests(unittest.TestCase):
         self.assertIn("Malformed ATP_LINT JSON", errors[0])
 
     def test_has_done_sentinel_parses_metadata(self):
-        done, meta = has_done_sentinel('x\nATP_DONE:{"declarations":2,"findings":3}\n')
+        done, meta, parse_error = has_done_sentinel('x\nATP_DONE:{"declarations":2,"findings":3}\n')
         self.assertTrue(done)
+        self.assertIsNone(parse_error)
         self.assertEqual(2, meta["declarations"])
         self.assertEqual(3, meta["findings"])
 
@@ -148,8 +158,10 @@ class ExecutorAsyncTests(unittest.TestCase):
             fake_lean.write_text("", encoding="utf-8")
             calls = []
 
-            def fake_run(args, cwd, env, stdout, stderr, text):
+            def fake_run(args, cwd, env, capture_output, text, check=False):
                 calls.append(args)
+                self.assertTrue(capture_output)
+                self.assertFalse(check)
                 Path(args[2]).write_text("compiled", encoding="utf-8")
                 return CompletedProc()
 

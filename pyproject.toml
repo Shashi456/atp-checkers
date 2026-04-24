@@ -44,17 +44,27 @@ ignore = [
     "PLR2004",  # magic numbers — heartbeat budgets and similar are legitimate
     "PLR0912",  # too many branches — orchestrator dispatch is branchy by nature
     "PLR0915",  # too many statements — same reason
+    "PLR0911",  # too many return statements — CLI dispatch branches
+    "PLW2901",  # redefined-loop-name — idiomatic `line = line.strip()` pattern
     "TRY003",   # avoid long exception messages — we want informative ones
     "TRY301",   # abstract-raise-to-its-own-function — overkill here
+    "TRY300",   # try-consider-else — stylistic
     "N806",     # lowercase-in-function — Lean binder names leak into Python vars
     "RUF012",   # mutable class attributes need ClassVar — optional pedantry
+    "PTH123",   # builtin-open — `open()` is fine; we don't need Path.open() everywhere
+    "SIM105",   # suppressible-exception — try/except/pass is clearer than contextlib.suppress here
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # CLI entrypoints often have different needs
 "runner/__main__.py" = [
-    "PLR0911",  # too many return statements — CLI dispatch branches
     "T201",     # print() is fine in CLI
+]
+# Tests legitimately use fake methods with unused `self` and Path(".") for cwd.
+"runner_tests/*.py" = [
+    "ARG001",   # unused-function-argument — fake methods receive `self` they ignore
+    "ARG002",   # same for method args in patch targets
+    "PTH201",   # Path(".") — explicit cwd in tests is readable
 ]
 
 [tool.ruff.format]

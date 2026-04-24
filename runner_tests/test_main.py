@@ -5,11 +5,16 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-from runner.__main__ import _ResultTracker, _load_existing_state
+from runner.__main__ import (
+    _enforce_toolchain_consistency,
+    _load_existing_state,
+    _ResultTracker,
+    _scan_existing_results,
+)
 
 
 class ResumeStateTests(unittest.TestCase):
-    def test_load_existing_state_seeds_counters_and_warns_on_mixed_toolchains(self):
+    def test_scan_and_load_seeds_counters(self):
         with tempfile.TemporaryDirectory() as td:
             results_file = Path(td) / "results.jsonl"
             rows = [
@@ -52,7 +57,7 @@ class ResumeStateTests(unittest.TestCase):
                     ],
                     "error_message": None,
                     "duration_ms": 2,
-                    "provenance": {"lean_toolchain": "lean/v2", "timestamp": "t"},
+                    "provenance": {"lean_toolchain": "lean/v1", "timestamp": "t"},
                     "metadata": {},
                 },
             ]
@@ -61,10 +66,10 @@ class ResumeStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            stderr = io.StringIO()
-            with redirect_stderr(stderr):
-                state = _load_existing_state(results_file, "lean/v1")
+            latest_by_key, seen_toolchains = _scan_existing_results(results_file)
+            state = _load_existing_state(results_file, latest_by_key)
 
+        self.assertEqual({"lean/v1"}, seen_toolchains)
         self.assertEqual({"p1", "p2"}, state.existing_ids)
         self.assertEqual(3, state.processed)
         self.assertEqual(1, state.stats["ok"])
@@ -76,7 +81,45 @@ class ResumeStateTests(unittest.TestCase):
         self.assertEqual(1, state.by_category["Potential Division by Zero"]["total"])
         self.assertEqual(1, state.by_confidence["maybe"])
         self.assertEqual(1, state.by_proved_by["omega"])
+
+    def test_enforce_toolchain_consistency_refuses_mismatch_by_default(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as cm:
+            _enforce_toolchain_consistency(
+                "lean/v2", {"lean/v1"}, allow_mismatch=False
+            )
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("Toolchain mismatch", stderr.getvalue())
+
+    def test_enforce_toolchain_consistency_refuses_mixed_existing(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            _enforce_toolchain_consistency(
+                "lean/v1", {"lean/v1", "lean/v2"}, allow_mismatch=False
+            )
         self.assertIn("mixed toolchains", stderr.getvalue())
+
+    def test_enforce_toolchain_consistency_allows_with_flag(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            _enforce_toolchain_consistency(
+                "lean/v2", {"lean/v1"}, allow_mismatch=True
+            )
+        self.assertIn("Warning", stderr.getvalue())
+        self.assertIn("Toolchain mismatch", stderr.getvalue())
+
+    def test_enforce_toolchain_consistency_passes_when_match(self):
+        # No exception, no output
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            _enforce_toolchain_consistency(
+                "lean/v1", {"lean/v1"}, allow_mismatch=False
+            )
+        self.assertEqual("", stderr.getvalue())
+
+    def test_enforce_toolchain_consistency_passes_when_empty(self):
+        # Empty seen set (no prior results) should never fire.
+        _enforce_toolchain_consistency("lean/v1", set(), allow_mismatch=False)
 
     def test_load_existing_state_dedupes_latest_row_per_problem(self):
         with tempfile.TemporaryDirectory() as td:
@@ -140,7 +183,8 @@ class ResumeStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            state = _load_existing_state(results_file, "lean/v2")
+            latest_by_key, _seen = _scan_existing_results(results_file)
+            state = _load_existing_state(results_file, latest_by_key)
 
         self.assertEqual({"p1"}, state.existing_ids)
         self.assertEqual({"_load_error_line_3"}, state.seen_load_error_ids)
@@ -158,7 +202,7 @@ class ResumeStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             results_fh = io.StringIO()
             logs_dir = Path(td)
-            state = _load_existing_state(Path(td) / "missing.jsonl", "lean/v1")
+            state = _load_existing_state(Path(td) / "missing.jsonl", {})
             state.processed = 3
             state.stats["ok"] = 2
             state.stats["infra_error"] = 1

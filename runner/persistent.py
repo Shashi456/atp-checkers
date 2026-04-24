@@ -169,7 +169,7 @@ class LeanRepl:
                 # violation, not a client type error. TRY004 false positive.
                 raise RuntimeError(  # noqa: TRY004
                     f"REPL did not return an environment: {json.dumps(resp)[:1000]}")
-            self._env_cache[tuple()] = env
+            self._env_cache[()] = env
         except Exception:
             await self.stop()
             raise
@@ -402,12 +402,16 @@ class LeanRepl:
             parse_errors.append(done_parse_err)
 
         truncation_error = None
-        if done and done_meta and "findings" in done_meta:
-            if done_meta["findings"] != len(findings):
-                truncation_error = (
-                    f"Output may be truncated: ATP_DONE reports {done_meta['findings']} "
-                    f"findings but only {len(findings)} were parsed"
-                )
+        if (
+            done
+            and done_meta
+            and "findings" in done_meta
+            and done_meta["findings"] != len(findings)
+        ):
+            truncation_error = (
+                f"Output may be truncated: ATP_DONE reports {done_meta['findings']} "
+                f"findings but only {len(findings)} were parsed"
+            )
 
         if parse_errors or truncation_error:
             parts = []
