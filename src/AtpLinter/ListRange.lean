@@ -222,31 +222,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     zeroIndexedCount := zeroIndexed.size
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : MetaM String := do
-  if result.ranges.isEmpty then
-    return s!"✓ {result.declName}: No range functions found"
-
-  let mut report := s!"ℹ {result.declName}: Found {result.ranges.size} range function(s)\n"
-
-  let mut i := 0
-  for rng in result.ranges do
-    i := i + 1
-    -- Use pre-computed string captured at analysis time
-    let warning := if rng.rangeType == "List.range" || rng.rangeType == "Finset.range"
-      then " ← 0-indexed!"
-      else ""
-    -- Format args: show all args for range'/interval functions
-    let argsStr := if rng.extraArgs.isEmpty then
-      rng.argumentStr
-    else
-      rng.argumentStr ++ ", " ++ ", ".intercalate rng.extraArgs.toList
-    report := report ++ s!"  [{i}] {rng.rangeType} ({argsStr}){warning}\n"
-
-  if result.zeroIndexedCount > 0 then
-    report := report ++ s!"  NOTE: {result.zeroIndexedCount} use(s) of 0-indexed range.\n"
-    report := report ++ s!"         Verify this matches the problem (e.g., 'first n positive integers' needs 1..n, not 0..n-1)\n"
-
-  return report
-
 end AtpLinter.ListRange

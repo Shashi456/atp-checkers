@@ -426,26 +426,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     unguardedCount := unguarded.size
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : MetaM String := do
-  if result.divisions.isEmpty then
-    return s!"✓ {result.declName}: No divisions found"
-
-  let mut report := s!"⚠ {result.declName}: Found {result.divisions.size} division(s)\n"
-
-  let mut i := 0
-  for div in result.divisions do
-    i := i + 1
-    -- Use pre-computed strings captured at analysis time
-    let typeStr ← ppExprSimple div.divisorType
-    let status := match div.guardEvidence with
-      | some ev => s!"✓ guarded ({ev})"
-      | none => "✗ UNGUARDED"
-    report := report ++ s!"  [{i}] {div.dividendStr} / {div.divisorStr} (type: {typeStr}) [{status}]\n"
-
-  if result.unguardedCount > 0 then
-    report := report ++ s!"  WARNING: {result.unguardedCount} unguarded division(s) - divisor could be zero\n"
-
-  return report
-
 end AtpLinter.DivisionByZero

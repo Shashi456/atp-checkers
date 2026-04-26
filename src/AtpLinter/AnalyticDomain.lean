@@ -152,7 +152,7 @@ def proveNonNeg? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
     return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
-  withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
+  withSnapshot snap <| withGuardFacts do
     let ty ← inferType x
     match ← mkZeroOf ty with
     | none => return none
@@ -169,7 +169,7 @@ def provePos? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : MetaM 
     return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
-  withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
+  withSnapshot snap <| withGuardFacts do
     let ty ← inferType x
     match ← mkZeroOf ty with
     | none => return none
@@ -189,7 +189,7 @@ def proveNeZero? (x : Expr) (lctx : LocalContext) (insts : LocalInstances) : Met
       return some .simp
 
   let snap : LocalCtxSnapshot := { lctx := lctx, insts := insts }
-  withSnapshot snap <| withDerivedLocalFacts <| withExpandedAndHyps do
+  withSnapshot snap <| withGuardFacts do
     let ty ← inferType x
     match ← mkZeroOf ty with
     | none => return none
@@ -507,28 +507,11 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   return { declName, issues := dedupIssues }
 
-/-- Human-readable operation description -/
+/-- Human-readable operation description used in structured finding messages. -/
 def AnalyticOp.description : AnalyticOp → String
   | .sqrt => "Real.sqrt requires 0 ≤ x (returns 0 for negative input)"
   | .log => "Real.log requires 0 < x (returns 0 for non-positive input)"
   | .inv => "x⁻¹ requires x ≠ 0 (returns 0 for zero input)"
   | .exp => "Real.exp has no domain restriction"
-
-
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.issues.isEmpty then
-    s!"✓ {result.declName}: No analytic domain issues detected"
-  else
-    let issueLines := result.issues.toList.map fun issue =>
-      let opName := match issue.op with
-        | .sqrt => "sqrt"
-        | .log => "log"
-        | .inv => "⁻¹"
-        | .exp => "exp"
-      s!"  {opName}({issue.argStr}): {issue.op.description}\n"
-    s!"⚠ {result.declName}: Found {result.issues.size} analytic domain issue(s)\n" ++
-      String.join issueLines ++
-      s!"  Suggestion: Add domain guard hypotheses or verify intended behavior\n"
 
 end AtpLinter.AnalyticDomain

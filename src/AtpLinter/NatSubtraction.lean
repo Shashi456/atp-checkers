@@ -311,25 +311,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     unguardedCount := unguarded.size
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : MetaM String := do
-  if result.subtractions.isEmpty then
-    return s!"✓ {result.declName}: No Nat subtractions found"
-
-  let mut report := s!"⚠ {result.declName}: Found {result.subtractions.size} Nat subtraction(s)\n"
-
-  let mut i := 0
-  for sub in result.subtractions do
-    i := i + 1
-    -- Use pre-computed strings captured at analysis time
-    let status := match sub.guardEvidence with
-      | some ev => s!"✓ guarded ({ev})"
-      | none => "✗ UNGUARDED"
-    report := report ++ s!"  [{i}] {sub.lhsStr} - {sub.rhsStr} [{status}]\n"
-
-  if result.unguardedCount > 0 then
-    report := report ++ s!"  WARNING: {result.unguardedCount} unguarded subtraction(s) may cause truncation issues\n"
-
-  return report
-
 end AtpLinter.NatSubtraction

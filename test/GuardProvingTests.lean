@@ -351,7 +351,7 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp intTdivGuarded
 
-/-- DivisionByZero: guarded (simp derives b ≠ 0). IntDivTruncation: still warns -/
+/-- DivisionByZero: guarded (omega derives b ≠ 0). IntDivTruncation: still warns -/
 def posGuardNat (a b : Nat) (h : 0 < b) : Nat := a / b
 /--
 info: Analysis of GuardProving.posGuardNat:
@@ -396,7 +396,7 @@ Summary: 0 error(s), 1 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp posGuardInt
 
-/-- DivisionByZero: guarded (simp derives b ≠ 0 from b < 0). IntDivTruncation: still warns -/
+/-- DivisionByZero: guarded (omega derives b ≠ 0 from b < 0). IntDivTruncation: still warns -/
 def negGuardInt (a b : Int) (h : b < 0) : Int := a / b
 /--
 info: Analysis of GuardProving.negGuardInt:

@@ -234,26 +234,15 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     patterns := allPatterns
   }
 
-/-- Human-readable truncation type -/
+/-- Human-readable truncation type used in structured finding messages. -/
 def TruncationType.toString : TruncationType → String
   | .intDiv => "integer division"
   | .natSub => "natural subtraction"
   | .intMod => "integer modulo"
 
-/-- Human-readable cast type -/
+/-- Human-readable cast type used in structured finding messages. -/
 def CastType.toString : CastType → String
   | .intToNat => "Int.toNat"
   | .natToFin => "Nat to Fin"
-
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.patterns.isEmpty then
-    s!"✓ {result.declName}: No cast-after-truncation patterns detected"
-  else
-    let patternLines := result.patterns.toList.map fun pat =>
-      s!"  {pat.castType.toString} applied to {pat.truncationType.toString}: {pat.innerExprStr}\n"
-    s!"⚠ {result.declName}: Found {result.patterns.size} cast-after-truncation pattern(s)\n" ++
-      String.join patternLines ++
-      s!"  Suggestion: The inner operation may have already lost precision\n"
 
 end AtpLinter.CastAfterTruncation

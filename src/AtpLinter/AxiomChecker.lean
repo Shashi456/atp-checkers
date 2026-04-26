@@ -103,13 +103,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       depAxioms := depAxioms
     }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if !result.isUserAxiom then
-    s!"✓ {result.declName}: Not a user axiom"
-  else if result.isProp then
-    s!"✗ {result.declName}: User axiom asserting a Prop - this is unproven!"
-  else
-    s!"⚠ {result.declName}: User axiom (non-Prop type)"
-
 end AtpLinter.AxiomChecker

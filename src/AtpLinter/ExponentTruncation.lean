@@ -75,7 +75,7 @@ def proveExponentNonNeg? (exp : Expr) : MetaM (Option ProvedBy) := do
 
     -- For Int, try to prove 0 ≤ exp with enriched context
     if ← isIntType exp then
-      withDerivedLocalFacts <| withExpandedAndHyps do
+      withGuardFacts do
         let zero := Lean.mkIntLit 0
         let goal ← Lean.Meta.mkLe zero exp
         tryProve? goal (useOmega := true)
@@ -311,20 +311,9 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     exponents := exponents
   }
 
-/-- Human-readable issue type -/
+/-- Human-readable issue type used in structured finding messages. -/
 def ExponentIssue.toString : ExponentIssue → String
   | .negativeExponent => "negative exponent with Nat result (totalized semantics - may produce 0 or 1 depending on instance)"
   | .possiblyNegative => "possibly negative exponent (totalized semantics if negative)"
-
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.exponents.isEmpty then
-    s!"✓ {result.declName}: No exponent truncation issues detected"
-  else
-    let expLines := result.exponents.toList.map fun exp =>
-      s!"  {exp.baseStr} ^ {exp.exponentStr}: {exp.issue.toString}\n"
-    s!"⚠ {result.declName}: Found {result.exponents.size} exponent issue(s)\n" ++
-      String.join expLines ++
-      s!"  Suggestion: Ensure exponent is non-negative for Nat result, or use Int/Rat\n"
 
 end AtpLinter.ExponentTruncation

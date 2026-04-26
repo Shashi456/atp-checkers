@@ -227,7 +227,7 @@ def guardedMod (a b : Nat) (h : b ≠ 0) : Nat := a % b
 /-- info: ✓ ArithmeticSemantics.guardedMod: No issues detected -/
 #guard_msgs in #check_atp guardedMod
 
--- Should NOT flag: simp derives b ≠ 0 from 0 < b
+-- Should NOT flag: positivity/omega derive b ≠ 0 from 0 < b
 def positivityGuardedMod (a b : Nat) (h : 0 < b) : Nat := a % b
 /-- info: ✓ ArithmeticSemantics.positivityGuardedMod: No issues detected -/
 #guard_msgs in #check_atp positivityGuardedMod

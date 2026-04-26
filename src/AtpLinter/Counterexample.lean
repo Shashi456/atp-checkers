@@ -452,21 +452,4 @@ def analyzeDecl (declName : Name) (hasOtherFindings : Bool := false)
       wasSkipped := false
     }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.wasSkipped then
-    s!"○ {result.declName}: Counterexample search skipped (gate not triggered)"
-  else
-    match result.counterexample with
-    | none =>
-      s!"✓ {result.declName}: No counterexample found in search space"
-    | some cex =>
-      let assignmentLines := cex.assignments.map fun a =>
-        s!"    {a.name} := {a.valueStr}"
-      let assignmentStr := String.intercalate "\n" assignmentLines
-      s!"✗ {result.declName}: COUNTEREXAMPLE FOUND\n" ++
-        s!"  Assignments:\n{assignmentStr}\n" ++
-        s!"  Instantiated proposition: {cex.instantiatedProp}\n" ++
-        s!"  This proposition evaluates to false!\n"
-
 end AtpLinter.Counterexample
