@@ -126,7 +126,7 @@ class ParseError:
 
 
 # ---------------------------------------------------------------------------
-# Parsing helpers (used by both backends)
+# Parsing helpers
 # ---------------------------------------------------------------------------
 
 def make_provenance(toolchain: str) -> Provenance:
@@ -168,3 +168,128 @@ def has_done_sentinel(text: str) -> tuple[bool, dict | None, str | None]:
                     return True, None, f"Malformed ATP_DONE JSON: {e} in: {payload[:100]}"
             return True, None, None
     return False, None, None
+
+
+def classify_lint_execution(
+    *,
+    problem: Problem,
+    toolchain: str,
+    duration_ms: int,
+    stdout: str,
+    stderr: str = "",
+    returncode: int = 0,
+    compile_error: bool | None = None,
+    compile_error_message: str | None = None,
+    metadata: dict | None = None,
+) -> LintResult:
+    """Classify raw linter output into the runner result schema."""
+    result_metadata = problem.metadata if metadata is None else metadata
+    findings, parse_errors = parse_lint_output(stdout)
+    done, done_meta, done_parse_err = has_done_sentinel(stdout)
+    if done_parse_err is not None:
+        parse_errors.append(done_parse_err)
+
+    if compile_error is None:
+        compile_error = returncode > 0
+    if compile_error and compile_error_message is None:
+        compile_error_message = (
+            f"=== STDOUT ===\n{stdout[:2000]}\n\n=== STDERR ===\n{stderr[:2000]}"
+        )[:4000]
+
+    truncation_error = None
+    if done and done_meta and "findings" in done_meta:
+        expected_findings = done_meta["findings"]
+        actual_findings = len(findings)
+        if expected_findings != actual_findings:
+            truncation_error = (
+                f"Output may be truncated: ATP_DONE reports {expected_findings} "
+                f"findings but only {actual_findings} were parsed"
+            )
+
+    if parse_errors or truncation_error:
+        errors_section = ""
+        if truncation_error:
+            errors_section += f"=== TRUNCATION ===\n{truncation_error}\n\n"
+        if parse_errors:
+            errors_section += "=== PARSE ERRORS ===\n" + "\n".join(parse_errors)
+        combined_output = (
+            f"=== STDOUT ===\n{stdout[:3000]}\n\n"
+            f"=== STDERR ===\n{stderr[:1000]}\n\n"
+            f"{errors_section}"
+        )
+        return LintResult(
+            problem_id=problem.id,
+            source=problem.source,
+            status="infra_error",
+            findings=findings,
+            error_message=combined_output[:4000],
+            duration_ms=duration_ms,
+            provenance=make_provenance(toolchain),
+            compile_error=compile_error,
+            compile_error_message=compile_error_message,
+            metadata=result_metadata,
+        )
+
+    if returncode < 0:
+        signal_num = -returncode
+        combined_output = (
+            f"Process killed by signal {signal_num}\n\n"
+            f"=== STDOUT ===\n{stdout[:2000]}\n\n"
+            f"=== STDERR ===\n{stderr[:2000]}"
+        )
+        return LintResult(
+            problem_id=problem.id,
+            source=problem.source,
+            status="infra_error",
+            findings=[],
+            error_message=combined_output[:4000],
+            duration_ms=duration_ms,
+            provenance=make_provenance(toolchain),
+            metadata=result_metadata,
+        )
+
+    if compile_error and not done:
+        return LintResult(
+            problem_id=problem.id,
+            source=problem.source,
+            status="compile_error",
+            findings=[],
+            error_message=compile_error_message,
+            duration_ms=duration_ms,
+            provenance=make_provenance(toolchain),
+            compile_error=True,
+            compile_error_message=compile_error_message,
+            metadata=result_metadata,
+        )
+
+    if not done:
+        combined_output = (
+            f"Linter did not complete (no ATP_DONE sentinel)\n\n"
+            f"=== STDOUT ===\n{stdout[:2000]}\n\n"
+            f"=== STDERR ===\n{stderr[:1000]}"
+        )
+        return LintResult(
+            problem_id=problem.id,
+            source=problem.source,
+            status="infra_error",
+            findings=[],
+            error_message=combined_output[:4000],
+            duration_ms=duration_ms,
+            provenance=make_provenance(toolchain),
+            compile_error=compile_error,
+            compile_error_message=compile_error_message,
+            metadata=result_metadata,
+        )
+
+    return LintResult(
+        problem_id=problem.id,
+        source=problem.source,
+        status="findings" if findings else "ok",
+        findings=findings,
+        error_message=None,
+        duration_ms=duration_ms,
+        provenance=make_provenance(toolchain),
+        compile_error=compile_error,
+        compile_error_message=compile_error_message,
+        metadata=result_metadata,
+    )
