@@ -112,6 +112,38 @@ private def tryGrind? (mvarId : MVarId) (config : Lean.Grind.Config) :
   catch _ => return none
   finally saved.restore
 
+private def simplifyOrFalseFact? (fact : Expr) : MetaM (Option Expr) := do
+  let ty ← whnf (← inferType fact)
+  if !ty.isAppOfArity ``Or 2 then
+    return none
+  let args := ty.getAppArgs
+  let lhs := args[0]!
+  let rhs := args[1]!
+  try
+    if rhs.isConstOf ``False then
+      return some (← mkAppM ``Eq.mp #[← mkAppM ``or_false #[lhs], fact])
+    if lhs.isConstOf ``False then
+      return some (← mkAppM ``Eq.mp #[← mkAppM ``false_or #[rhs], fact])
+    return none
+  catch _ =>
+    return none
+
+private partial def collectOrFalseSimplifications (fact : Expr) (fuel : Nat) :
+    MetaM (List Expr) := do
+  if fuel == 0 then
+    return []
+  match ← simplifyOrFalseFact? fact with
+  | none => return []
+  | some simplified =>
+      return simplified :: (← collectOrFalseSimplifications simplified (fuel - 1))
+
+private def getVacuityOmegaFacts : MetaM (List Expr) := do
+  let facts ← getLocalPropHyps
+  let mut out := facts
+  for fact in facts do
+    out := (← collectOrFalseSimplifications fact 4) ++ out
+  return out
+
 /--
 Try to prove `goal` using a controlled sequence:
 1) `assumptionCore` (catches direct hypotheses)
@@ -325,7 +357,7 @@ def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy) := do
         else
           pure ()
     | some gFalse =>
-        let facts ← gFalse.withContext getLocalPropHyps
+        let facts ← gFalse.withContext getVacuityOmegaFacts
         Lean.Elab.Tactic.Omega.omega facts gFalse
         if ← gFalse.isAssigned then
           return some .omega

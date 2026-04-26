@@ -44,9 +44,9 @@ theorem falseBoolEquality : ∀ (b : Bool), b = true := by sorry
 info: Analysis of AdvancedChecker.falseBoolEquality:
 ──────────────────────────────────────────────────
 [ERROR] AdvancedChecker.falseBoolEquality: Counterexample Found
-  Counterexample found: [] makes proposition false
+  Counterexample found: [b := false] makes proposition false
   Taxonomy: I.a - Specification Error
-  Suggestion: The instantiated proposition `∀ (b : Bool), b = true` evaluates to false
+  Suggestion: The instantiated proposition `false = true` evaluates to false
 
 ──────────────────────────────────────────────────
 Summary: 1 error(s), 0 warning(s), 0 info(s)
@@ -480,7 +480,7 @@ info: Analysis of AdvancedChecker.propBinderFalse:
 [ERROR] AdvancedChecker.propBinderFalse: Counterexample Found
   Counterexample found: [n := 1] makes proposition false
   Taxonomy: I.a - Specification Error
-  Suggestion: The instantiated proposition `1 > 0 → 1 + 1 = 1` evaluates to false
+  Suggestion: The instantiated proposition `1 + 1 = 1` evaluates to false
 
 ──────────────────────────────────────────────────
 Summary: 1 error(s), 0 warning(s), 0 info(s)
@@ -548,8 +548,13 @@ info: Analysis of AdvancedChecker.ReviewPatterns.castAfterSub:
   Taxonomy: I.d - Lean Semantic Traps
   Suggestion: Add hypothesis `h : b ≤ a` or use Int instead of Nat
 
+[WARNING] AdvancedChecker.ReviewPatterns.castAfterSub: Cast After Truncation
+  Nat.cast applied after natural subtraction: a - b
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: The inner operation may have already lost precision before the cast
+
 ──────────────────────────────────────────────────
-Summary: 0 error(s), 1 warning(s), 0 info(s)
+Summary: 0 error(s), 2 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp castAfterSub
 
@@ -568,8 +573,13 @@ info: Analysis of AdvancedChecker.ReviewPatterns.castAfterDiv:
   Taxonomy: I.d - Lean Semantic Traps
   Suggestion: Ensure truncation is intended, or use Real/Rat if precise division is needed
 
+[WARNING] AdvancedChecker.ReviewPatterns.castAfterDiv: Cast After Truncation
+  Nat.cast applied after integer division: a / b
+  Taxonomy: I.d - Lean Semantic Traps
+  Suggestion: The inner operation may have already lost precision before the cast
+
 ──────────────────────────────────────────────────
-Summary: 0 error(s), 2 warning(s), 0 info(s)
+Summary: 0 error(s), 3 warning(s), 0 info(s)
 -/
 #guard_msgs in #check_atp castAfterDiv
 
