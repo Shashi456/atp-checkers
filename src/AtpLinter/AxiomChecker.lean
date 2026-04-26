@@ -91,10 +91,7 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
       depAxioms := #[]
     }
   | _ =>
-    let depAxioms ←
-      match constInfo.value? with
-      | some _ => userPropAxiomDependencies env declName
-      | none => pure #[]
+    let depAxioms ← userPropAxiomDependencies env declName
     return {
       declName := declName
       isAxiom := false
