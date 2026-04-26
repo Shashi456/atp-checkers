@@ -307,44 +307,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     mayTruncateCount := mayCount
   }
 
-/-! ## Phase 5: Reporting -/
-
-
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : MetaM String := do
-  if result.truncations.isEmpty then
-    return s!"✓ {result.declName}: No integer division truncation issues found"
-
-  let mut report := s!"⚠ {result.declName}: Found integer division issues\n"
-
-  let mut i := 0
-  for trunc in result.truncations do
-    i := i + 1
-
-    let kindStr := match trunc.kind with
-      | .nat => "Nat"
-      | .intHDiv => "Int"
-      | .intTdiv => "Int.tdiv"
-      | .intFdiv => "Int.fdiv"
-      | .intEdiv => "Int.ediv"
-
-    let (severity, detail) := match trunc.status with
-      | .willTruncate =>
-          let detail := match trunc.dividendVal, trunc.divisorVal with
-            | some a, some b =>
-                -- Use Int division for the truncated result
-                let truncResult := a / b
-                -- For float approximation, handle signs correctly
-                let floatResult := (Float.ofInt a) / (Float.ofInt b)
-                s!" → {a}/{b} = {truncResult} (not {floatResult})"
-            | _, _ => ""
-          ("ERROR", detail)
-      | .mayTruncate => ("WARNING", " → may lose precision")
-      | .noTruncate => ("OK", "")
-
-    report := report ++ s!"  [{i}] [{severity}] ({kindStr}) {trunc.dividendStr} / {trunc.divisorStr}{detail}\n"
-
-  report := report ++ s!"Summary: {result.willTruncateCount} error(s), {result.mayTruncateCount} warning(s)\n"
-  return report
-
 end AtpLinter.IntDivTruncation

@@ -274,31 +274,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     unguardedCount := unguarded.size
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : MetaM String := do
-  if result.conversions.isEmpty then
-    return s!"✓ {result.declName}: No Int.toNat conversions found"
-
-  let mut report := s!"⚠ {result.declName}: Found {result.conversions.size} Int→Nat conversion(s)\n"
-
-  let mut i := 0
-  for conv in result.conversions do
-    i := i + 1
-    -- Use pre-computed string captured at analysis time
-    let funcName := match conv.kind with
-      | .toNat => "Int.toNat"
-      | .natAbs => "Int.natAbs"
-    let status := match conv.kind with
-      | .toNat =>
-        match conv.guardEvidence with
-        | some ev => s!"✓ guarded ({ev})"
-        | none => "✗ UNGUARDED"
-      | .natAbs => "⚠ review (absolute value)"
-    report := report ++ s!"  [{i}] {funcName} ({conv.argumentStr}) [{status}]\n"
-
-  if result.unguardedCount > 0 then
-    report := report ++ s!"  WARNING: {result.unguardedCount} unguarded Int.toNat - negative values will become 0\n"
-
-  return report
-
 end AtpLinter.IntToNat

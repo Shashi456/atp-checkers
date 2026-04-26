@@ -170,6 +170,23 @@ def tryDecide (prop : Expr) : MetaM (Option Bool) := do
   finally
     saved.restore
 
+def mkDecideCounterexampleResult (e : Expr) (assignments : List Assignment) :
+    MetaM CounterexampleResult := do
+  let propStr ← ppExprSimple e
+  return {
+    assignments := assignments.reverse
+    instantiatedProp := propStr
+  }
+
+def tryDecideCounterexample? (e : Expr) (assignments : List Assignment) :
+    MetaM (Option CounterexampleResult) := do
+  let isPropTy ← isProp e
+  if !isPropTy then
+    return none
+  match ← tryDecide e with
+  | some false => return some (← mkDecideCounterexampleResult e assignments)
+  | some true | none => return none
+
 /-- Main counterexample search using single-binder peeling.
     Uses StateT to properly track total assignments across all branches. -/
 partial def searchCounterexampleM (e : Expr) (assignments : List Assignment)
@@ -179,26 +196,15 @@ partial def searchCounterexampleM (e : Expr) (assignments : List Assignment)
   -- Use > not >= to allow exactly maxBinders assignments
   if assignments.length > cfg.maxBinders then return none
 
-  -- First, check if this is already a decidable proposition (before whnf)
-  -- whnf can unfold GT.gt to Nat.le which loses Decidable instance
-  let isPropTy ← isProp e
-  if isPropTy then
-    match ← tryDecide e with
-    | some false =>
-      -- Found counterexample!
-      let propStr ← ppExprSimple e
-      return some {
-        assignments := assignments.reverse
-        instantiatedProp := propStr
-      }
-    | some true => return none  -- Proposition is true, not a counterexample
-    | none => pure ()  -- Continue to check for more binders
-
-  -- Normalize to check for forall binders
+  -- Normalize only to check for forall binders. Deciding the unpeeled forall
+  -- can prove false but gives a useless empty assignment like `[]`; peel
+  -- enumerable binders first so the report names the concrete witness. Keep
+  -- the direct decide result as a fallback for non-enumerable binders.
   let eWhnf ← whnf e
 
   match eWhnf with
   | .forallE n ty body bi =>
+    let directFailure? ← tryDecideCounterexample? e assignments
     -- Check if we should skip this binder
     let skip ← shouldSkipBinder ty bi
     if skip then
@@ -212,20 +218,22 @@ partial def searchCounterexampleM (e : Expr) (assignments : List Assignment)
         | some true =>
           -- Hypothesis is true, continue checking conclusion
           withLocalDecl n bi ty fun fvar => do
-            searchCounterexampleM (body.instantiate1 fvar) assignments cfg
+            match ← searchCounterexampleM (body.instantiate1 fvar) assignments cfg with
+            | some result => return some result
+            | none => return directFailure?
         | some false =>
           -- Hypothesis is false → implication is vacuously true, not a counterexample
-          return none
+          return directFailure?
         | none =>
           -- Can't decide hypothesis → can't determine if valid counterexample
-          return none
+          return directFailure?
       else
         -- Other non-enumerable types (Type, Sort, functions): abort
-        return none
+        return directFailure?
     else
       -- Try to enumerate values for this type
       match ← getEnumerable ty cfg with
-      | none => return none  -- Can't enumerate, skip entire search
+      | none => return directFailure?  -- Can't enumerate; keep decidable fallback.
       | some vals =>
         for v in vals do
           let currentCount ← get
@@ -237,11 +245,13 @@ partial def searchCounterexampleM (e : Expr) (assignments : List Assignment)
           let assignment : Assignment := { name := n, value := some v, valueStr := valueStr }
           let result ← searchCounterexampleM body' (assignment :: assignments) cfg
           if result.isSome then return result
-        return none
+        return directFailure?
 
   | _ =>
-    -- No more binders and couldn't decide - give up
-    return none
+    -- Check decidability after all enumerable binders have been instantiated.
+    -- Use the original expression, not whnf: whnf can unfold GT.gt to Nat.le
+    -- in ways that lose useful Decidable instances.
+    tryDecideCounterexample? e assignments
 
 /-- Entry point that runs the StateT computation -/
 def searchCounterexample (e : Expr) (cfg : Config) : MetaM (Option CounterexampleResult) := do
@@ -451,22 +461,5 @@ def analyzeDecl (declName : Name) (hasOtherFindings : Bool := false)
       counterexample := none
       wasSkipped := false
     }
-
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.wasSkipped then
-    s!"○ {result.declName}: Counterexample search skipped (gate not triggered)"
-  else
-    match result.counterexample with
-    | none =>
-      s!"✓ {result.declName}: No counterexample found in search space"
-    | some cex =>
-      let assignmentLines := cex.assignments.map fun a =>
-        s!"    {a.name} := {a.valueStr}"
-      let assignmentStr := String.intercalate "\n" assignmentLines
-      s!"✗ {result.declName}: COUNTEREXAMPLE FOUND\n" ++
-        s!"  Assignments:\n{assignmentStr}\n" ++
-        s!"  Instantiated proposition: {cex.instantiatedProp}\n" ++
-        s!"  This proposition evaluates to false!\n"
 
 end AtpLinter.Counterexample

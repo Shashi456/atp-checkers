@@ -386,25 +386,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     unguardedCount := unguarded.size
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : MetaM String := do
-  if result.modulos.isEmpty then
-    return s!"✓ {result.declName}: No modulo operations found"
-
-  let mut report := s!"⚠ {result.declName}: Found {result.modulos.size} modulo operation(s)\n"
-
-  let mut i := 0
-  for mod in result.modulos do
-    i := i + 1
-    let typeStr ← ppExprSimple mod.divisorType
-    let status := match mod.guardEvidence with
-      | some ev => s!"✓ guarded ({ev})"
-      | none => "✗ UNGUARDED"
-    report := report ++ s!"  [{i}] {mod.dividendStr} % {mod.divisorStr} (type: {typeStr}) [{status}]\n"
-
-  if result.unguardedCount > 0 then
-    report := report ++ s!"  WARNING: {result.unguardedCount} unguarded modulo(s) - divisor could be zero (n % 0 = n)\n"
-
-  return report
-
 end AtpLinter.ModuloByZero

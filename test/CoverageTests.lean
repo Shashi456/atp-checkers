@@ -122,6 +122,10 @@ theorem covVacuousTP (n : Nat) (h : n < 0) : False := by omega
 #cov_assert_has covVacuousTP "Vacuous Theorem"
 #cov_assert_confidence covVacuousTP "Vacuous Theorem" proven
 
+theorem covVacuousOrFalse (n : Nat) (h : n = 0 ∨ False) (h2 : n > 0) : True := by
+  trivial
+#cov_assert_has covVacuousOrFalse "Vacuous Theorem"
+
 theorem covVacuousTN (a b : Nat) (h : a ≤ b) : a ≤ b + 1 := by omega
 #cov_assert_not covVacuousTN "Vacuous Theorem"
 
@@ -147,6 +151,23 @@ theorem covCexTP (n : Nat) : n = n + 1 := by sorry
 #cov_assert_confidence covCexTP "Counterexample Found" proven
 #cov_assert_proved_by covCexTP "Counterexample Found" "decide"
 
+theorem covCexBoolWitness : ∀ b : Bool, b = true := by sorry
+/--
+info: Analysis of Coverage.covCexBoolWitness:
+──────────────────────────────────────────────────
+[ERROR] Coverage.covCexBoolWitness: Counterexample Found
+  Counterexample found: [b := false] makes proposition false
+  Taxonomy: I.a - Specification Error
+  Suggestion: The instantiated proposition `false = true` evaluates to false
+
+──────────────────────────────────────────────────
+Summary: 1 error(s), 0 warning(s), 0 info(s)
+-/
+#guard_msgs in #check_atp covCexBoolWitness
+
+theorem covCexNonEnumerableFallback (n : Nat) (_s : Finset Nat) : n ≠ 1 := by sorry
+#cov_assert_has covCexNonEnumerableFallback "Counterexample Found"
+
 theorem covCexTN (n : Nat) : n = n := by rfl
 #cov_assert_not covCexTN "Counterexample Found"
 
@@ -161,6 +182,9 @@ theorem covCexFN_maxBinders (a b c d e : Nat) : a + b + c + d + e > 0 := by sorr
 
 def covCastTP (a b : Int) : Nat := (a / b).toNat
 #cov_assert_has covCastTP "Cast After Truncation"
+
+def covCastNatSubToInt (a b : Nat) : Int := ((a - b : Nat) : Int)
+#cov_assert_has covCastNatSubToInt "Cast After Truncation"
 
 def covCastTN (a : Int) : Nat := a.toNat
 #cov_assert_not covCastTN "Cast After Truncation"

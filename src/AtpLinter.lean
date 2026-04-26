@@ -557,9 +557,4 @@ def elabCheckAtpAll : CommandElab := fun _ => do
   -- Emit completion sentinel
   liftCoreM <| emitDone processedDecls totalFindings
 
-/-- Tactic to check current goal context -/
-syntax (name := checkAtpTac) "check_atp" : tactic
-
--- Note: Full tactic implementation would go here
-
 end AtpLinter

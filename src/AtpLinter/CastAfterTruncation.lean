@@ -38,6 +38,8 @@ inductive TruncationType where
 inductive CastType where
   | intToNat      -- Int.toNat or ↑ to Nat
   | natToFin      -- Nat to Fin n
+  | natCast       -- Nat.cast / Int.ofNat after Nat truncation
+  | intCast       -- Int.cast / IntCast.intCast after Int truncation
   deriving Inhabited, Repr, BEq, Hashable
 
 /-- Information about a detected cast-after-truncation -/
@@ -109,6 +111,24 @@ def isNatToFin (e : Expr) : MetaM (Option Expr) := do
     | _ => return none
   | _ => return none
 
+/-- Check if expression is a Nat cast/coercion. -/
+def isNatCast (e : Expr) : Option Expr :=
+  if e.isAppOfArity ``Nat.cast 3 then
+    some e.getAppArgs[2]!
+  else if e.isAppOfArity ``Int.ofNat 1 then
+    some e.getAppArgs[0]!
+  else
+    none
+
+/-- Check if expression is an Int cast/coercion. -/
+def isIntCast (e : Expr) : Option Expr :=
+  if e.isAppOfArity ``Int.cast 3 then
+    some e.getAppArgs[2]!
+  else if e.isAppOfArity ``IntCast.intCast 3 then
+    some e.getAppArgs[2]!
+  else
+    none
+
 /-- Recursively find cast-after-truncation patterns -/
 partial def findCastTruncPatterns (e : Expr) : MetaM (Array CastTruncInfo) := do
   let mut results := #[]
@@ -123,6 +143,37 @@ partial def findCastTruncPatterns (e : Expr) : MetaM (Array CastTruncInfo) := do
       results := results.push {
         truncationType := truncType
         castType := .intToNat
+        innerExpr := arg
+        innerExprStr := innerStr
+      }
+    | none => pure ()
+  | none => pure ()
+
+  -- Check for Nat.cast / Int.ofNat over a truncating Nat operation
+  -- Note: Do NOT call whnf on arg - it unfolds HSub/HDiv to implementation details
+  match isNatCast e with
+  | some arg =>
+    match ← detectTruncation arg with
+    | some truncType =>
+      let innerStr ← ppExprSimple arg
+      results := results.push {
+        truncationType := truncType
+        castType := .natCast
+        innerExpr := arg
+        innerExprStr := innerStr
+      }
+    | none => pure ()
+  | none => pure ()
+
+  -- Check for Int.cast / IntCast.intCast over a truncating Int operation
+  match isIntCast e with
+  | some arg =>
+    match ← detectTruncation arg with
+    | some truncType =>
+      let innerStr ← ppExprSimple arg
+      results := results.push {
+        truncationType := truncType
+        castType := .intCast
         innerExpr := arg
         innerExprStr := innerStr
       }
@@ -234,26 +285,17 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     patterns := allPatterns
   }
 
-/-- Human-readable truncation type -/
+/-- Human-readable truncation type used in structured finding messages. -/
 def TruncationType.toString : TruncationType → String
   | .intDiv => "integer division"
   | .natSub => "natural subtraction"
   | .intMod => "integer modulo"
 
-/-- Human-readable cast type -/
+/-- Human-readable cast type used in structured finding messages. -/
 def CastType.toString : CastType → String
   | .intToNat => "Int.toNat"
   | .natToFin => "Nat to Fin"
-
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.patterns.isEmpty then
-    s!"✓ {result.declName}: No cast-after-truncation patterns detected"
-  else
-    let patternLines := result.patterns.toList.map fun pat =>
-      s!"  {pat.castType.toString} applied to {pat.truncationType.toString}: {pat.innerExprStr}\n"
-    s!"⚠ {result.declName}: Found {result.patterns.size} cast-after-truncation pattern(s)\n" ++
-      String.join patternLines ++
-      s!"  Suggestion: The inner operation may have already lost precision\n"
+  | .natCast => "Nat.cast"
+  | .intCast => "Int.cast"
 
 end AtpLinter.CastAfterTruncation

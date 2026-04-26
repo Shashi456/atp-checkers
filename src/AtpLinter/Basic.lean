@@ -6,6 +6,7 @@
 -/
 
 import Lean
+import AtpLinter.GuardPolicy
 import Mathlib.Algebra.CharZero.Defs
 
 open Lean Meta
@@ -97,23 +98,6 @@ def ErrorCategory.taxonomyCategory : ErrorCategory → String
   | .analyticDomain => "I.d - Lean Semantic Traps"
   | .infraError => "Infrastructure"
 
-/-- Get severity for a category -/
-def ErrorCategory.defaultSeverity : ErrorCategory → Severity
-  | .truncatedSubtraction => .warning
-  | .divisionByZero => .warning
-  | .intDivTruncation => .error  -- Often critical bug
-  | .intToNat => .warning
-  | .listRange => .info
-  | .modulo => .warning
-  | .unsoundAxiom => .error     -- Axiom instead of theorem
-  | .vacuousTheorem => .error   -- Contradictory hypotheses (omega)
-  | .unusedBinder => .warning   -- Possibly intentional
-  | .counterexample => .error   -- Definitively false proposition
-  | .castAfterTruncation => .warning  -- Potential compounded truncation
-  | .exponentTruncation => .warning   -- Possibly intentional
-  | .analyticDomain => .warning       -- Missing domain guard for totalized function
-  | .infraError => .info              -- Internal linter error (not a user issue)
-
 instance : ToString ErrorCategory := ⟨ErrorCategory.toString⟩
 
 instance : ToString Severity where
@@ -131,10 +115,6 @@ def LintFinding.format (f : LintFinding) : String :=
   match f.suggestion with
   | some sug => base ++ s!"\n  Suggestion: {sug}"
   | none => base
-
-/-- Check if a string contains a substring -/
-def containsSubstr (s : String) (sub : String) : Bool :=
-  (s.splitOn sub).length > 1
 
 /-- Check if an expression is syntactically zero.
     Handles:
@@ -188,47 +168,6 @@ def isSafeTypeForNonZeroLiteral (ty : Expr) : MetaM Bool := do
     return true
   catch _ =>
     return false
-
-/-- Build a local context for analyzing binder j's type using "prop-full,
-    data-prefix" semantics:
-    - Keep all earlier binders (0..j-1)
-    - Drop the current binder j
-    - Drop all later NON-propositional binders (data evidence like Fin, Subtype
-      values whose derived facts could circularly justify the type)
-    - Keep later propositional binders UNLESS they depend on a dropped binder
-      (prevents circular props like `h : x.1 < n - k` where x was dropped)
-
-    This prevents:
-    - Self-justification: `i : Fin (n - k)` using its own Fin.isLt
-    - Same-type siblings: `(x y : Fin (n - k))` — y is data, dropped
-    - Mixed-type witnesses: `(x : Fin (n-k)) (y : {m // m < n-k})` — y is data
-    - Dependent circular props: `(x : Fin (n-k)) (h : x.1 < n-k)` — h depends on x
-
-    While preserving:
-    - Legitimate later guards: `(x : Fin (a/b)) (hb : b ≠ 0)` — hb is prop,
-      independent of x -/
-def mkSafeLCtxForType (fullLCtx : LocalContext) (fvars : Array Expr) (j : Nat) : MetaM LocalContext := do
-  let mut lctx := fullLCtx
-  -- Track which fvars are dropped so we can check dependency
-  let mut dropped : Array FVarId := #[fvars[j]!.fvarId!]
-  -- Always drop the current binder
-  lctx := lctx.erase fvars[j]!.fvarId!
-  -- Process later binders
-  for k in [j + 1 : fvars.size] do
-    let fvar := fvars[k]!
-    let fid := fvar.fvarId!
-    let ty ← Meta.inferType fvar
-    if ← Meta.isProp ty then
-      -- Propositional binder: keep UNLESS it depends on a dropped binder
-      let dependsOnDropped := dropped.any fun did => ty.containsFVar did
-      if dependsOnDropped then
-        lctx := lctx.erase fid
-        dropped := dropped.push fid
-    else
-      -- Data binder: always drop (could produce circular derived facts)
-      lctx := lctx.erase fid
-      dropped := dropped.push fid
-  return lctx
 
 /-- Pretty print an expression for reporting, with fallback for bound variables -/
 def ppExprSimple (e : Expr) : MetaM String := do

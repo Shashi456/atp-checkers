@@ -32,7 +32,6 @@ from .models import (
     Problem,
     Provenance,
 )
-from .persistent import run_batch as run_batch_persistent
 
 LINTER_INTERNAL_ERROR_CATEGORY = "Linter Internal Error"
 
@@ -78,10 +77,6 @@ Examples:
         help="Opt out of the toolchain-consistency check when --append or --skip-existing "
              "is used against results.jsonl produced under a different Lean toolchain. "
              "By default such a mismatch is a fatal error to avoid silently mixing results.")
-    parser.add_argument("--backend", type=str, choices=["persistent", "subprocess"],
-        default="subprocess",
-        help="Execution backend (default: subprocess, resolves lake env once then invokes lean directly; "
-             "persistent: keeps REPL processes alive, requires `lake build repl`)")
     return parser
 
 
@@ -592,7 +587,7 @@ def main():
         "execution": {
             "workspace": str(args.workspace),
             "toolchain": toolchain,
-            "backend": args.backend,
+            "backend": "subprocess",
             "workers": args.workers,
             "timeout": args.timeout,
             "output_dir": str(args.output),
@@ -604,8 +599,7 @@ def main():
         json.dump(run_manifest, f, indent=2, ensure_ascii=False)
 
     # Run
-    mode = f"persistent REPL ({args.workers} worker(s))" if args.backend == "persistent" \
-        else f"subprocess ({args.workers} worker(s))"
+    mode = f"subprocess ({args.workers} worker(s))"
     print(f"Running linter [{mode}]...")
 
     with open(results_file, "a", encoding="utf-8") as results_fh:
@@ -620,25 +614,16 @@ def main():
         problems = _iter_runnable_problems(items, tracker, dataset_source, toolchain, resume_state)
 
         try:
-            if args.backend == "persistent":
-                asyncio.run(run_batch_persistent(
-                    workspace=args.workspace, problems=problems, toolchain=toolchain,
-                    timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
-                    collect_results=False,
-                ))
-            else:
-                asyncio.run(run_batch_subprocess(
-                    workspace=args.workspace, problems=problems, toolchain=toolchain,
-                    timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
-                    collect_results=False,
-                ))
+            asyncio.run(run_batch_subprocess(
+                workspace=args.workspace, problems=problems, toolchain=toolchain,
+                timeout=args.timeout, on_result=tracker.on_result, workers=args.workers,
+                collect_results=False,
+            ))
         except KeyboardInterrupt:
             # On Ctrl-C, asyncio.run cancels tasks which cancels run_batch's
             # in-flight windows (see the BaseException handlers in
-            # executor/persistent run_batch). That reaches the individual
-            # lint_problem calls, which kill their subprocesses in finally
-            # blocks. Still: some children spawned with start_new_session
-            # may outlive their parent; best-effort kill-on-exit.
+            # executor run_batch). Some children spawned with start_new_session
+            # may still outlive their parent; best-effort kill-on-exit.
             print("\n[interrupted] cancelling; killing any surviving Lean children...",
                   file=sys.stderr)
             _kill_surviving_lean_children()

@@ -241,20 +241,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     unusedBinders := unusedBinders
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if result.unusedBinders.isEmpty then
-    s!"✓ {result.declName}: No unused quantified variables"
-  else
-    let binderLines := result.unusedBinders.toList.map fun binder =>
-      -- m2 fix: Show correct symbol for each binder kind
-      let kindStr := match binder.kind with
-        | .forall_ => "∀"
-        | .lambda => "λ"
-        | .exists_ => "∃"
-      s!"  [{kindStr}] {binder.nameStr} : {binder.typeStr} is bound but never used\n"
-    s!"⚠ {result.declName}: Found {result.unusedBinders.size} unused quantified variable(s)\n" ++
-      String.join binderLines ++
-      s!"  Suggestion: Remove unused variable or use it in the body\n"
-
 end AtpLinter.UnusedBinder

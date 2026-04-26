@@ -1,4 +1,4 @@
-"""Subprocess backend for the ATP checkers runner (fallback/debug).
+"""Subprocess execution for the ATP checkers runner.
 
 Spawns a fresh Lean process per problem. It resolves the workspace environment
 once via `lake env` and then invokes the Lean binary directly, falling back to
@@ -8,7 +8,7 @@ fresh `lake env` shell.
 """
 from __future__ import annotations
 
-import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -17,24 +17,30 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from .models import (
     DEFAULT_TIMEOUT,
     LintResult,
     Problem,
-    has_done_sentinel,
+    classify_lint_execution,
     make_provenance,
-    parse_lint_output,
 )
-from .preamble import normalize_imports, partition_preamble, render_problem_source, split_preamble
+from .preamble import (
+    normalize_imports,
+    partition_preamble,
+    render_problem_source,
+    split_preamble,
+)
 
 log = logging.getLogger(__name__)
 
-_FAILURE_RETRY_SECONDS = 30.0
+_CACHE_FAILURE_RETRY_SECONDS = 30.0
 
 _LEAN_ENV_LOCK = threading.Lock()
 _LEAN_ENV_CACHE: dict[Path, tuple[tuple[str, ...], dict[str, str]]] = {}
@@ -98,6 +104,11 @@ def _ensure_import_bundle(
     lean_env: dict[str, str] | None,
     extra_paths: tuple[str, ...] = (),
 ) -> str | None:
+    """Return a cached import-bundle module when the optimization is available.
+
+    Import bundles are opportunistic startup optimization. Failure to compile
+    one must fall back to the original problem source, not affect result status.
+    """
     if lean_cmd is None or lean_env is None or len(lean_cmd) != 1:
         log.debug("Skipping import-bundle cache: unsupported Lean command %r", lean_cmd)
         return None
@@ -158,13 +169,15 @@ def _ensure_import_bundle(
                 text=True, check=False,
             )
             if proc.returncode != 0:
-                log.warning(
+                log.debug(
                     "Import-bundle cache compile failed for %s: %s",
                     module_name,
                     (proc.stderr or proc.stdout or "unknown error")[:400],
                 )
                 with _IMPORT_CACHE_LOCK:
-                    _IMPORT_MODULE_FAILURES[key] = time.monotonic() + _FAILURE_RETRY_SECONDS
+                    _IMPORT_MODULE_FAILURES[key] = (
+                        time.monotonic() + _CACHE_FAILURE_RETRY_SECONDS
+                    )
                 return None
 
         with _IMPORT_CACHE_LOCK:
@@ -175,8 +188,8 @@ def _ensure_import_bundle(
 def _resolve_direct_lean(workspace: Path) -> tuple[tuple[str, ...], dict[str, str]] | None:
     """Resolve a workspace-specific Lean command and environment once.
 
-    Uses `lake env python` to capture the effective Lean environment, then caches
-    the direct Lean binary path from the `LEAN` variable.
+    Uses the current Python executable under `lake env` to capture the effective
+    Lean environment, then caches the direct Lean binary path from `LEAN`.
     """
     workspace = workspace.resolve()
     with _LEAN_ENV_LOCK:
@@ -194,7 +207,7 @@ def _resolve_direct_lean(workspace: Path) -> tuple[tuple[str, ...], dict[str, st
             [
                 "lake",
                 "env",
-                "python",
+                sys.executable,
                 "-c",
                 "import json, os; print(json.dumps(dict(os.environ)))",
             ],
@@ -210,7 +223,9 @@ def _resolve_direct_lean(workspace: Path) -> tuple[tuple[str, ...], dict[str, st
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError, RuntimeError) as exc:
         log.warning("Direct Lean resolution failed for %s: %s", workspace, exc)
         with _LEAN_ENV_LOCK:
-            _LEAN_ENV_FAILURES[workspace] = time.monotonic() + _FAILURE_RETRY_SECONDS
+            _LEAN_ENV_FAILURES[workspace] = (
+                time.monotonic() + _CACHE_FAILURE_RETRY_SECONDS
+            )
         return None
 
     with _LEAN_ENV_LOCK:
@@ -218,8 +233,143 @@ def _resolve_direct_lean(workspace: Path) -> tuple[tuple[str, ...], dict[str, st
     return resolved
 
 
-async def _resolve_direct_lean_async(workspace: Path) -> tuple[tuple[str, ...], dict[str, str]] | None:
-    return await asyncio.to_thread(_resolve_direct_lean, workspace)
+@dataclass(frozen=True)
+class _LeanProcessResult:
+    returncode: int | None
+    stdout: bytes
+    stderr: bytes
+    timed_out: bool = False
+    spawn_error: str | None = None
+    cancelled: bool = False
+
+
+class _RunCancellation:
+    """Track subprocesses owned by one batch so interrupts can stop them."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._processes: set[subprocess.Popen[bytes]] = set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def register(self, proc: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            if not self._event.is_set():
+                self._processes.add(proc)
+                return
+
+        _terminate_process_group_now(proc)
+
+    def unregister(self, proc: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            self._processes.discard(proc)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._event.set()
+            processes = tuple(self._processes)
+
+        for proc in processes:
+            _terminate_process_group_now(proc)
+
+
+def _kill_process_group(proc: subprocess.Popen[bytes]) -> None:
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        return
+
+    for sig, wait_seconds in ((signal.SIGTERM, 0.5), (signal.SIGKILL, 2.0)):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            proc.wait(timeout=wait_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _terminate_process_group_now(proc: subprocess.Popen[bytes]) -> None:
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        return
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+
+
+def _run_lean_process_sync(
+    lean_cmd: tuple[str, ...],
+    problem_file_name: str,
+    workspace: Path,
+    env: dict[str, str] | None,
+    timeout: int,
+    cancellation: _RunCancellation | None = None,
+) -> _LeanProcessResult:
+    """Run Lean with subprocess primitives that behave reliably under threads."""
+    if cancellation is not None and cancellation.is_set():
+        return _LeanProcessResult(
+            returncode=None,
+            stdout=b"",
+            stderr=b"",
+            cancelled=True,
+        )
+
+    try:
+        proc = subprocess.Popen(
+            [*lean_cmd, problem_file_name],
+            cwd=workspace,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except (OSError, FileNotFoundError) as exc:
+        return _LeanProcessResult(
+            returncode=None,
+            stdout=b"",
+            stderr=b"",
+            spawn_error=str(exc),
+        )
+
+    if cancellation is not None:
+        cancellation.register(proc)
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return _LeanProcessResult(
+            proc.returncode,
+            stdout,
+            stderr,
+            cancelled=cancellation.is_set() if cancellation is not None else False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _kill_process_group(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            stdout = exc.output or b""
+            stderr = exc.stderr or b""
+        return _LeanProcessResult(
+            returncode=proc.returncode,
+            stdout=stdout or b"",
+            stderr=stderr or b"",
+            timed_out=True,
+        )
+    except BaseException:
+        _kill_process_group(proc)
+        raise
+    finally:
+        if cancellation is not None:
+            cancellation.unregister(proc)
 
 
 def _sanitize_id_for_lean(problem_id: str) -> str:
@@ -244,10 +394,35 @@ def _sanitize_id_for_lean(problem_id: str) -> str:
 
 def _problem_extra_lean_paths(problem: Problem) -> tuple[str, ...]:
     merged: list[str] = []
-    for path in (*_env_extra_lean_paths(), *_normalize_extra_lean_paths(problem.metadata.get("extra_lean_paths"))):
+    for path in (
+        *_env_extra_lean_paths(),
+        *_normalize_extra_lean_paths(problem.metadata.get("extra_lean_paths")),
+    ):
         if path not in merged:
             merged.append(path)
     return tuple(merged)
+
+
+def _elapsed_ms(start_time: float) -> int:
+    return int((time.monotonic() - start_time) * 1000)
+
+
+def _infra_error_result(
+    problem: Problem,
+    toolchain: str,
+    start_time: float,
+    message: str,
+) -> LintResult:
+    return LintResult(
+        problem_id=problem.id,
+        source=problem.source,
+        status="infra_error",
+        findings=[],
+        error_message=message,
+        duration_ms=_elapsed_ms(start_time),
+        provenance=make_provenance(toolchain),
+        metadata=problem.metadata,
+    )
 
 
 def wrap_with_linter(lean_code: str) -> str:
@@ -259,8 +434,7 @@ def wrap_with_linter(lean_code: str) -> str:
     return render_problem_source(lean_code)
 
 
-
-async def lint_problem(
+def _lint_problem_sync(
     workspace: Path,
     problem: Problem,
     toolchain: str,
@@ -268,6 +442,7 @@ async def lint_problem(
     row_index: int = 0,
     lean_cmd: tuple[str, ...] | None = None,
     lean_env: dict[str, str] | None = None,
+    cancellation: _RunCancellation | None = None,
 ) -> LintResult:
     """
     Lint a single problem.
@@ -297,8 +472,7 @@ async def lint_problem(
     problem_lean_env = None
     if lean_cmd is not None and lean_env is not None:
         problem_lean_env = _augment_lean_env(workspace, lean_env, extra_paths)
-        import_module = await asyncio.to_thread(
-            _ensure_import_bundle,
+        import_module = _ensure_import_bundle(
             workspace,
             imports,
             lean_cmd,
@@ -306,24 +480,22 @@ async def lint_problem(
             extra_paths,
         )
     try:
-        problem_file.write_text(render_problem_source(problem.lean_code, import_module=import_module), encoding="utf-8")
+        problem_file.write_text(
+            render_problem_source(problem.lean_code, import_module=import_module),
+            encoding="utf-8",
+        )
     except OSError as e:
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        return LintResult(
-            problem_id=problem.id,
-            source=problem.source,
-            status="infra_error",
-            findings=[],
-            error_message=f"Failed to write problem file: {e}",
-            duration_ms=duration_ms,
-            provenance=make_provenance(toolchain),
-            metadata=problem.metadata,
+        return _infra_error_result(
+            problem,
+            toolchain,
+            start_time,
+            f"Failed to write problem file: {e}",
         )
 
     try:
         # Run Lean with timeout, in its own process group
         if lean_cmd is None:
-            resolved = await _resolve_direct_lean_async(workspace)
+            resolved = _resolve_direct_lean(workspace)
             if resolved is not None:
                 lean_cmd, lean_env = resolved
         if lean_env is not None:
@@ -331,193 +503,98 @@ async def lint_problem(
         if lean_cmd is None:
             lean_cmd = ("lake", "env", "lean")
             if extra_paths:
-                problem_lean_env = _augment_lean_env(workspace, dict(os.environ), extra_paths)
-                log.debug("Extra Lean paths injected into lake env lean fallback: %s", extra_paths)
+                problem_lean_env = _augment_lean_env(
+                    workspace,
+                    dict(os.environ),
+                    extra_paths,
+                )
+                log.debug(
+                    "Extra Lean paths injected into lake env lean fallback: %s",
+                    extra_paths,
+                )
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *lean_cmd, problem_file.name,
-                cwd=workspace,
-                env=problem_lean_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
+        if cancellation is None:
+            proc_result = _run_lean_process_sync(
+                lean_cmd,
+                problem_file.name,
+                workspace,
+                problem_lean_env,
+                timeout,
             )
-        except (OSError, FileNotFoundError) as e:
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="infra_error",
-                findings=[],
-                error_message=f"Failed to spawn Lean process: {e}",
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                metadata=problem.metadata,
+        else:
+            proc_result = _run_lean_process_sync(
+                lean_cmd,
+                problem_file.name,
+                workspace,
+                problem_lean_env,
+                timeout,
+                cancellation=cancellation,
             )
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=timeout,
+        if proc_result.spawn_error is not None:
+            return _infra_error_result(
+                problem,
+                toolchain,
+                start_time,
+                f"Failed to spawn Lean process: {proc_result.spawn_error}",
             )
-        except asyncio.TimeoutError:
-            # Kill entire process group and wait for cleanup
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                await asyncio.sleep(0.5)
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            # Wait for process to actually terminate to avoid zombies
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                pass
-
-            duration_ms = int((time.monotonic() - start_time) * 1000)
+        if proc_result.cancelled:
+            return _infra_error_result(
+                problem,
+                toolchain,
+                start_time,
+                "Lean process cancelled",
+            )
+        if proc_result.timed_out:
             return LintResult(
                 problem_id=problem.id,
                 source=problem.source,
                 status="timeout",
                 findings=[],
                 error_message=f"Exceeded {timeout}s timeout",
-                duration_ms=duration_ms,
+                duration_ms=_elapsed_ms(start_time),
                 provenance=make_provenance(toolchain),
                 metadata=problem.metadata,
             )
 
-        stdout_str = stdout_bytes.decode("utf-8", errors="replace")
-        stderr_str = stderr_bytes.decode("utf-8", errors="replace")
-        if proc.returncode is None:
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="infra_error",
-                findings=[],
-                error_message="Lean process completed without a return code",
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                metadata=problem.metadata,
+        if proc_result.returncode is None:
+            return _infra_error_result(
+                problem,
+                toolchain,
+                start_time,
+                "Lean process completed without a return code",
             )
-        returncode = proc.returncode
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-
-        # Parse linter output
-        findings, parse_errors = parse_lint_output(stdout_str)
-        done, done_meta, done_parse_err = has_done_sentinel(stdout_str)
-        if done_parse_err is not None:
-            parse_errors.append(done_parse_err)
-        compile_error = returncode > 0
-        compile_error_message = None
-        if compile_error:
-            compile_error_message = (
-                f"=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:2000]}"
-            )[:4000]
-
-        # Check for truncated output by comparing expected vs actual findings count
-        truncation_error = None
-        if done and done_meta and "findings" in done_meta:
-            expected_findings = done_meta["findings"]
-            actual_findings = len(findings)
-            if expected_findings != actual_findings:
-                truncation_error = f"Output may be truncated: ATP_DONE reports {expected_findings} findings but only {actual_findings} were parsed"
-
-        # If we had parse errors or truncation, treat as infra_error
-        if parse_errors or truncation_error:
-            # Combine stdout and stderr for diagnostics
-            errors_section = ""
-            if truncation_error:
-                errors_section += f"=== TRUNCATION ===\n{truncation_error}\n\n"
-            if parse_errors:
-                errors_section += "=== PARSE ERRORS ===\n" + "\n".join(parse_errors)
-            combined_output = f"=== STDOUT ===\n{stdout_str[:3000]}\n\n=== STDERR ===\n{stderr_str[:1000]}\n\n{errors_section}"
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="infra_error",
-                findings=findings,  # Include any findings we did parse
-                error_message=combined_output[:4000],
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                compile_error=compile_error,
-                compile_error_message=compile_error_message,
-                metadata=problem.metadata,
-            )
-
-        # Determine status
-        if returncode < 0:
-            # Negative return code means killed by signal (OOM, SIGKILL, etc.) - infrastructure issue
-            signal_num = -returncode
-            combined_output = f"Process killed by signal {signal_num}\n\n=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:2000]}"
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="infra_error",
-                findings=[],
-                error_message=combined_output[:4000],
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                metadata=problem.metadata,
-            )
-        if returncode > 0:
-            if done:
-                return LintResult(
-                    problem_id=problem.id,
-                    source=problem.source,
-                    status="findings" if findings else "ok",
-                    findings=findings,
-                    error_message=None,
-                    duration_ms=duration_ms,
-                    provenance=make_provenance(toolchain),
-                    compile_error=True,
-                    compile_error_message=compile_error_message,
-                    metadata=problem.metadata,
-                )
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="compile_error",
-                findings=[],
-                error_message=compile_error_message,
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                compile_error=True,
-                compile_error_message=compile_error_message,
-                metadata=problem.metadata,
-            )
-        if not done:
-            combined_output = f"Linter did not complete (no ATP_DONE sentinel)\n\n=== STDOUT ===\n{stdout_str[:2000]}\n\n=== STDERR ===\n{stderr_str[:1000]}"
-            return LintResult(
-                problem_id=problem.id,
-                source=problem.source,
-                status="infra_error",
-                findings=[],
-                error_message=combined_output[:4000],
-                duration_ms=duration_ms,
-                provenance=make_provenance(toolchain),
-                compile_error=compile_error,
-                compile_error_message=compile_error_message,
-                metadata=problem.metadata,
-            )
-        return LintResult(
-            problem_id=problem.id,
-            source=problem.source,
-            status="findings" if findings else "ok",
-            findings=findings,
-            error_message=None,
-            duration_ms=duration_ms,
-            provenance=make_provenance(toolchain),
-            compile_error=compile_error,
-            compile_error_message=compile_error_message,
-            metadata=problem.metadata,
+        return classify_lint_execution(
+            problem=problem,
+            toolchain=toolchain,
+            duration_ms=_elapsed_ms(start_time),
+            stdout=proc_result.stdout.decode("utf-8", errors="replace"),
+            stderr=proc_result.stderr.decode("utf-8", errors="replace"),
+            returncode=proc_result.returncode,
         )
 
     finally:
         # Cleanup temp file and build artifacts
         _cleanup_problem_artifacts(workspace, file_stem)
+
+
+async def lint_problem(
+    workspace: Path,
+    problem: Problem,
+    toolchain: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    row_index: int = 0,
+    lean_cmd: tuple[str, ...] | None = None,
+    lean_env: dict[str, str] | None = None,
+) -> LintResult:
+    return _lint_problem_sync(
+        workspace,
+        problem,
+        toolchain,
+        timeout=timeout,
+        row_index=row_index,
+        lean_cmd=lean_cmd,
+        lean_env=lean_env,
+    )
 
 
 def _cleanup_problem_artifacts(workspace: Path, file_stem: str):
@@ -535,7 +612,7 @@ def _cleanup_problem_artifacts(workspace: Path, file_stem: str):
 
 
 
-async def run_batch(
+def _run_batch_sync(
     workspace: Path,
     problems: Iterable[Problem],
     toolchain: str,
@@ -558,44 +635,49 @@ async def run_batch(
     Returns:
         List of LintResults
     """
+    resolved = _resolve_direct_lean(workspace)
+    lean_cmd = resolved[0] if resolved is not None else None
+    lean_env = resolved[1] if resolved is not None else None
+    cancellation = _RunCancellation()
+
     if workers <= 1:
         # Sequential execution
         results: list[LintResult] = []
-        resolved = await _resolve_direct_lean_async(workspace)
-        lean_cmd = resolved[0] if resolved is not None else None
-        lean_env = resolved[1] if resolved is not None else None
-        for idx, problem in enumerate(problems):
-            result = await lint_problem(
-                workspace,
-                problem,
-                toolchain,
-                timeout,
-                row_index=idx,
-                lean_cmd=lean_cmd,
-                lean_env=lean_env,
-            )
-            if collect_results:
-                results.append(result)
-            if on_result:
-                on_result(result)
+        try:
+            for idx, problem in enumerate(problems):
+                result = _lint_problem_sync(
+                    workspace,
+                    problem,
+                    toolchain,
+                    timeout,
+                    row_index=idx,
+                    lean_cmd=lean_cmd,
+                    lean_env=lean_env,
+                    cancellation=cancellation,
+                )
+                if collect_results:
+                    results.append(result)
+                if on_result:
+                    on_result(result)
+        except BaseException:
+            cancellation.cancel()
+            raise
         return results
+
     # Parallel execution with a bounded in-flight window, streaming results in dataset order.
     # Keep the in-flight count aligned with the requested worker count so `-j N`
     # does not fan out into many more concurrent Lean processes than expected.
     window = max(1, workers)
-    resolved = await _resolve_direct_lean_async(workspace)
-    lean_cmd = resolved[0] if resolved is not None else None
-    lean_env = resolved[1] if resolved is not None else None
     result_slots: dict[int, LintResult] = {}
     next_emit = 0
     results: list[LintResult] = []
-    in_flight: set[asyncio.Task] = set()
+    in_flight: dict[concurrent.futures.Future[LintResult], int] = {}
     problem_iter = iter(problems)
     next_idx = 0
     exhausted = False
 
-    async def process_one(idx: int, problem: Problem):
-        result_slots[idx] = await lint_problem(
+    def process_one(idx: int, problem: Problem) -> LintResult:
+        return _lint_problem_sync(
             workspace,
             problem,
             toolchain,
@@ -603,6 +685,7 @@ async def run_batch(
             row_index=idx,
             lean_cmd=lean_cmd,
             lean_env=lean_env,
+            cancellation=cancellation,
         )
 
     def emit_ready() -> None:
@@ -615,6 +698,8 @@ async def run_batch(
                 on_result(result)
             next_emit += 1
 
+    completed = False
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=window)
     try:
         while not exhausted or in_flight:
             while not exhausted and len(in_flight) < window:
@@ -623,22 +708,49 @@ async def run_batch(
                 except StopIteration:
                     exhausted = True
                     break
-                task = asyncio.create_task(process_one(next_idx, problem))
-                in_flight.add(task)
+                future = pool.submit(process_one, next_idx, problem)
+                in_flight[future] = next_idx
                 next_idx += 1
 
             if in_flight:
-                done, in_flight = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    task.result()
+                done, _pending = concurrent.futures.wait(
+                    in_flight,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    idx = in_flight.pop(future)
+                    result_slots[idx] = future.result()
                 emit_ready()
 
         emit_ready()
+        completed = True
         return results
-    except BaseException:
-        # Cancel any in-flight tasks so their subprocesses don't leak
-        for task in in_flight:
-            task.cancel()
-        if in_flight:
-            await asyncio.gather(*in_flight, return_exceptions=True)
-        raise
+    finally:
+        if completed:
+            pool.shutdown(wait=True)
+        else:
+            cancellation.cancel()
+            for future in in_flight:
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
+
+
+async def run_batch(
+    workspace: Path,
+    problems: Iterable[Problem],
+    toolchain: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    on_result: Callable | None = None,
+    workers: int = 1,
+    collect_results: bool = True,
+) -> list[LintResult]:
+    """Async compatibility wrapper around the synchronous subprocess backend."""
+    return _run_batch_sync(
+        workspace,
+        problems,
+        toolchain,
+        timeout=timeout,
+        on_result=on_result,
+        workers=workers,
+        collect_results=collect_results,
+    )

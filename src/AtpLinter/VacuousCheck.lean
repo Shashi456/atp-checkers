@@ -188,28 +188,4 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
     vacuityInfo := vacuityInfo
   }
 
-/-- Generate a report for a single declaration -/
-def generateReport (result : AnalysisResult) : String :=
-  if !result.isVacuous then
-    s!"✓ {result.declName}: Not vacuous"
-  else
-    match result.vacuityInfo with
-    | none => s!"✓ {result.declName}: Not vacuous"
-    | some info =>
-      match info.kind with
-      | .contradictoryHyps =>
-        let proofMethod := info.provedBy.toString
-        let hypSection := if info.relevantHyps.isEmpty then ""
-          else "  Potentially relevant hypotheses:\n" ++
-            String.join (info.relevantHyps.toList.map (fun h => s!"    {h}\n"))
-        s!"✗ {result.declName}: VACUOUS THEOREM\n" ++
-          s!"  Hypotheses are contradictory (proved by {proofMethod})\n" ++
-          hypSection ++
-          s!"  The theorem is trivially true for the wrong reason\n"
-      | .emptyDomain binderName typeDesc =>
-        s!"✗ {result.declName}: VACUOUS THEOREM (empty domain)\n" ++
-          s!"  Quantified variable '{binderName}' has empty type: {typeDesc}\n" ++
-          s!"  The theorem is trivially true because no such value exists\n" ++
-          s!"  Suggestion: Check bounds - domain should likely be non-empty\n"
-
 end AtpLinter.VacuousCheck

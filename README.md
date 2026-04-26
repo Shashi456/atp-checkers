@@ -91,17 +91,15 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 | `--format, -f` | `jsonl` | Dataset format: `jsonl`, `json`, `lean` (directory of `.lean` files), or `hf` (HuggingFace repo ID) |
 | `--split` | auto | Split to use for HuggingFace datasets (prefers `test`, then the first available) |
 | `--header-file` | — | Path to a `.lean` file whose contents are prepended to every problem (useful for project-wide imports or open namespaces) |
-| `--backend` | `subprocess` | Execution backend: `subprocess` (default, resolves lean env once) or `persistent` (REPL, requires `lake build repl`) |
 | `--timeout` | 30 | Timeout per problem in seconds |
 | `--workers, -j` | 1 | Number of parallel workers |
 | `--append` | off | Append to existing `results.jsonl` instead of failing |
 | `--skip-existing` | off | Resume interrupted runs (skips already-processed problem IDs) |
 | `--toolchain` | auto | Lean toolchain string (auto-detected from workspace) |
 
-The default `subprocess` backend resolves the workspace Lean environment once
-and invokes the Lean binary directly per problem, with import-bundle caching
-to avoid repeated import cost. Use `--backend persistent` for REPL-based
-execution (requires `lake build repl`).
+The runner resolves the workspace Lean environment once and invokes the Lean
+binary directly per problem, with import-bundle caching to avoid repeated
+import cost.
 
 > **Concurrency note:** `--workers > 1` parallelizes problems within a single
 > runner process safely. Do **not** point two independent runner processes at
@@ -120,11 +118,8 @@ workspace (e.g., a local Mathlib fork or companion repo), set the
 # Quick smoke test (no Mathlib needed)
 python -m runner datasets/examples/minimal_no_mathlib.jsonl -w . -o out --timeout 60
 
-# Full benchmark run with parallelism (persistent REPL, default)
+# Full benchmark run with parallelism
 python -m runner my_benchmark.jsonl -w . -o results -j 4 --timeout 120
-
-# Fallback to subprocess mode (slower, no REPL needed)
-python -m runner my_benchmark.jsonl -w . -o results -j 4 --backend subprocess
 
 # Resume an interrupted run
 python -m runner my_benchmark.jsonl -w . -o results --skip-existing --append
