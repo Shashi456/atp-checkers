@@ -360,7 +360,11 @@ opaque tryPlausibleSafe (prop : Expr) (declName : Name) (cfg : Config)
 
 /-- Check if a declaration contains sorry -/
 def containsSorry (constInfo : ConstantInfo) : Bool :=
-  match constInfo.value? with
+  let value? :=
+    match constInfo with
+    | .thmInfo info => some info.value
+    | _ => constInfo.value?
+  match value? with
   | some v => go v
   | none => false
 where
