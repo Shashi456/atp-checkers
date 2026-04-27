@@ -243,24 +243,25 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
-  if let some value := value? then
+  if value?.isSome then
     let isPropType ← isProp type
     if !isPropType then
-      let valueConvs ← withLCtx emptyLCtx #[] do
-        lambdaTelescope value fun fvars body => do
-          let fullLCtx ← getLCtx
-          let mut convs := #[]
-          for j in [:fvars.size] do
-            let fvar := fvars[j]!
-            let ldecl ← fvar.fvarId!.getDecl
-            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
-            for r in (← findIntToNat ldecl.type lctxForType) do
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueConvs ← withLCtx emptyLCtx #[] do
+          lambdaTelescope value fun fvars body => do
+            let fullLCtx ← getLCtx
+            let mut convs := #[]
+            for j in [:fvars.size] do
+              let fvar := fvars[j]!
+              let ldecl ← fvar.fvarId!.getDecl
+              let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+              for r in (← findIntToNat ldecl.type lctxForType) do
+                convs := convs.push r
+            for r in (← findIntToNat body fullLCtx) do
               convs := convs.push r
-          for r in (← findIntToNat body fullLCtx) do
-            convs := convs.push r
-          return convs
-      for r in valueConvs do
-        allConvs := allConvs.push r
+            return convs
+        for r in valueConvs do
+          allConvs := allConvs.push r
 
   -- Deduplicate findings
   allConvs := deduplicateConversions allConvs

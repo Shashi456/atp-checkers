@@ -280,25 +280,26 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
-  if let some value := value? then
+  if value?.isSome then
     let isPropType ← isProp type
     if !isPropType then
-      let valueExps ← withLCtx emptyLCtx #[] do
-        lambdaTelescope value fun fvars body => do
-          let fullLCtx ← getLCtx
-          let fullInsts ← getLocalInstances
-          let mut exps := #[]
-          for j in [:fvars.size] do
-            let fvar := fvars[j]!
-            let ldecl ← fvar.fvarId!.getDecl
-            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
-            for r in (← findExponentPatterns ldecl.type lctxForType fullInsts) do
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueExps ← withLCtx emptyLCtx #[] do
+          lambdaTelescope value fun fvars body => do
+            let fullLCtx ← getLCtx
+            let fullInsts ← getLocalInstances
+            let mut exps := #[]
+            for j in [:fvars.size] do
+              let fvar := fvars[j]!
+              let ldecl ← fvar.fvarId!.getDecl
+              let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+              for r in (← findExponentPatterns ldecl.type lctxForType fullInsts) do
+                exps := exps.push r
+            for r in (← findExponentPatterns body fullLCtx fullInsts) do
               exps := exps.push r
-          for r in (← findExponentPatterns body fullLCtx fullInsts) do
-            exps := exps.push r
-          return exps
-      for r in valueExps do
-        allExps := allExps.push r
+            return exps
+        for r in valueExps do
+          allExps := allExps.push r
 
   -- R3 fix: Simplified filter (no more zeroExponent case)
   let filteredExps := allExps.filter fun exp =>

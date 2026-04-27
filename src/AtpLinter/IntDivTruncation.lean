@@ -287,12 +287,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Only analyze value for non-Prop definitions (skip proof terms)
   -- Proof terms can be enormous and contain incidental operations
-  if let some value := constInfo.value? then
+  if constInfo.value?.isSome then
     let isPropType ← isProp constInfo.type
     if !isPropType then
-      let valueTruncs ← findDivisionsCore value
-      for r in valueTruncs do
-        allTruncs := allTruncs.push r
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueTruncs ← findDivisionsCore value
+        for r in valueTruncs do
+          allTruncs := allTruncs.push r
 
   -- Deduplicate findings
   allTruncs := deduplicateTruncations allTruncs

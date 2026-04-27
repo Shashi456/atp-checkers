@@ -483,25 +483,26 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
-  if let some value := value? then
+  if value?.isSome then
     let isPropType ← isProp type
     if !isPropType then
-      let valueIssues ← withLCtx emptyLCtx #[] do
-        lambdaTelescope value fun fvars body => do
-          let fullLCtx ← getLCtx
-          let fullInsts ← getLocalInstances
-          let mut issues := #[]
-          for j in [:fvars.size] do
-            let fvar := fvars[j]!
-            let ldecl ← fvar.fvarId!.getDecl
-            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
-            for r in (← findAnalyticPatterns ldecl.type lctxForType fullInsts) do
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueIssues ← withLCtx emptyLCtx #[] do
+          lambdaTelescope value fun fvars body => do
+            let fullLCtx ← getLCtx
+            let fullInsts ← getLocalInstances
+            let mut issues := #[]
+            for j in [:fvars.size] do
+              let fvar := fvars[j]!
+              let ldecl ← fvar.fvarId!.getDecl
+              let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+              for r in (← findAnalyticPatterns ldecl.type lctxForType fullInsts) do
+                issues := issues.push r
+            for r in (← findAnalyticPatterns body fullLCtx fullInsts) do
               issues := issues.push r
-          for r in (← findAnalyticPatterns body fullLCtx fullInsts) do
-            issues := issues.push r
-          return issues
-      for r in valueIssues do
-        allIssues := allIssues.push r
+            return issues
+        for r in valueIssues do
+          allIssues := allIssues.push r
 
   let dedupIssues := deduplicateIssues allIssues
 

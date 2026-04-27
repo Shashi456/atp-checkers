@@ -356,24 +356,25 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions.
-  if let some value := value? then
+  if value?.isSome then
     let isPropType ← isProp type
     if !isPropType then
-      let valueMods ← withLCtx emptyLCtx #[] do
-        lambdaTelescope value fun fvars body => do
-          let fullLCtx ← getLCtx
-          let mut mods := #[]
-          for j in [:fvars.size] do
-            let fvar := fvars[j]!
-            let ldecl ← fvar.fvarId!.getDecl
-            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
-            for r in (← findModulos ldecl.type lctxForType) do
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueMods ← withLCtx emptyLCtx #[] do
+          lambdaTelescope value fun fvars body => do
+            let fullLCtx ← getLCtx
+            let mut mods := #[]
+            for j in [:fvars.size] do
+              let fvar := fvars[j]!
+              let ldecl ← fvar.fvarId!.getDecl
+              let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+              for r in (← findModulos ldecl.type lctxForType) do
+                mods := mods.push r
+            for r in (← findModulos body fullLCtx) do
               mods := mods.push r
-          for r in (← findModulos body fullLCtx) do
-            mods := mods.push r
-          return mods
-      for r in valueMods do
-        allMods := allMods.push r
+            return mods
+        for r in valueMods do
+          allMods := allMods.push r
 
   -- Deduplicate findings
   allMods := deduplicateModulos allMods

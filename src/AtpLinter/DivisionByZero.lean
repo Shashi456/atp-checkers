@@ -363,6 +363,20 @@ def deduplicateDivisions (divs : Array DivInfo) : Array DivInfo :=
     | none => (seen.insert key out.size, out.push div)
   out
 
+private def analyzeValueDivisions (value : Expr) : MetaM (Array DivInfo) := do
+  lambdaTelescope value fun fvars body => do
+    let fullLCtx ← getLCtx
+    let mut divs := #[]
+    for j in [:fvars.size] do
+      let fvar := fvars[j]!
+      let ldecl ← fvar.fvarId!.getDecl
+      let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
+      for r in (← findDivisions ldecl.type lctxForType) do
+        divs := divs.push r
+    for r in (← findDivisions body fullLCtx) do
+      divs := divs.push r
+    return divs
+
 /-- Analyze a declaration for division issues -/
 def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
   let env ← getEnv
@@ -396,24 +410,14 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Analyze value: open all lambda binders first for full-scope guard checking.
   -- Only analyze value for non-Prop definitions (skip proof terms).
-  if let some value := value? then
+  if value?.isSome then
     let isPropType ← isProp type
     if !isPropType then
-      let valueDivs ← withLCtx emptyLCtx #[] do
-        lambdaTelescope value fun fvars body => do
-          let fullLCtx ← getLCtx
-          let mut divs := #[]
-          for j in [:fvars.size] do
-            let fvar := fvars[j]!
-            let ldecl ← fvar.fvarId!.getDecl
-            let lctxForType := ← mkSafeLCtxForType fullLCtx fvars j
-            for r in (← findDivisions ldecl.type lctxForType) do
-              divs := divs.push r
-          for r in (← findDivisions body fullLCtx) do
-            divs := divs.push r
-          return divs
-      for r in valueDivs do
-        allDivs := allDivs.push r
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueDivs ← withLCtx emptyLCtx #[] do
+          analyzeValueDivisions value
+        for r in valueDivs do
+          allDivs := allDivs.push r
 
   -- Deduplicate findings (can get duplicates from HDiv.hDiv and Nat.div paths)
   allDivs := deduplicateDivisions allDivs

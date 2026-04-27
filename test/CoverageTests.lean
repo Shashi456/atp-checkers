@@ -223,6 +223,53 @@ def covAnalyticFP_literal : Rat := (2 : Rat)⁻¹
 #cov_assert_not covAnalyticFP_literal "Analytic Domain Totalization"
 
 -- ============================================================
+-- Recursive helper body coverage
+-- ============================================================
+
+/-- Newer Lean versions may put recursive bodies in internal helpers such as
+    `f._f`; value-based checkers should still inspect those through `f`. -/
+def covHiddenNatSub : Nat → Nat
+  | 0 => 0
+  | k + 1 => covHiddenNatSub k + (k - 1)
+#cov_assert_has covHiddenNatSub "Truncated Nat Subtraction"
+
+def covHiddenDiv : Nat → Nat
+  | 0 => 0
+  | k + 1 => covHiddenDiv k + (1 / k)
+#cov_assert_has covHiddenDiv "Potential Division by Zero"
+#cov_assert_has covHiddenDiv "Integer Division Truncation"
+
+def covHiddenModulo : Nat → Nat
+  | 0 => 0
+  | k + 1 => covHiddenModulo k + (1 % k)
+#cov_assert_has covHiddenModulo "Modulo Edge Case"
+
+def covHiddenToNat : Nat → Nat
+  | 0 => 0
+  | k + 1 => covHiddenToNat k + ((-1 : Int).toNat + k)
+#cov_assert_has covHiddenToNat "Unguarded Int.toNat"
+
+def covHiddenRange : Nat → List Nat
+  | 0 => []
+  | k + 1 => covHiddenRange k ++ List.range k
+#cov_assert_has covHiddenRange "0-Indexed Range"
+
+def covHiddenCastAfterTruncation : Nat → Nat
+  | 0 => 0
+  | k + 1 => covHiddenCastAfterTruncation k + (((k : Int) / 2).toNat)
+#cov_assert_has covHiddenCastAfterTruncation "Cast After Truncation"
+
+def covHiddenExponentTruncation : Nat → Nat
+  | 0 => 0
+  | k + 1 => covHiddenExponentTruncation k + k ^ (-1 : Int)
+#cov_assert_has covHiddenExponentTruncation "Exponent Truncation"
+
+def covHiddenAnalytic : Nat → Rat
+  | 0 => 0
+  | k + 1 => covHiddenAnalytic k + (0 : Rat)⁻¹
+#cov_assert_has covHiddenAnalytic "Analytic Domain Totalization"
+
+-- ============================================================
 -- FN-known-gap (documented limitation)
 -- ============================================================
 

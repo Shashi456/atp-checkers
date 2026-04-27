@@ -116,6 +116,60 @@ def LintFinding.format (f : LintFinding) : String :=
   | some sug => base ++ s!"\n  Suggestion: {sug}"
   | none => base
 
+/-- Internal helper constants generated for recursive definitions can hold the
+    user-written body while the public declaration only calls a recursor.
+    These helpers should be inspected through the public declaration so findings
+    keep stable user-facing names instead of auxiliary names. -/
+private partial def collectSameDeclInternalRefs (owner : Name) (e : Expr) : Array Name :=
+  let ownerPrefix := owner.toString ++ "."
+  let rec go (e : Expr) : StateM (Array Name) Unit := do
+    match e with
+    | .const name _ =>
+        if name != owner && name.isInternal && name.toString.startsWith ownerPrefix then
+          let seen ← get
+          if !seen.contains name then
+            set (seen.push name)
+    | .app f a => go f; go a
+    | .lam _ ty body _ => go ty; go body
+    | .forallE _ ty body _ => go ty; go body
+    | .letE _ ty val body _ => go ty; go val; go body
+    | .mdata _ inner => go inner
+    | .proj _ _ inner => go inner
+    | _ => pure ()
+  ((go e).run #[]).2
+
+/-- Values that declaration-body checkers should inspect for a public
+    declaration. Includes the public value plus transitive same-declaration
+    internal helper values, which newer Lean versions use for some recursive
+    bodies. -/
+def declarationValuesForBodyAnalysis (declName : Name) : MetaM (Array Expr) := do
+  let env ← getEnv
+  let some constInfo := env.find? declName
+    | throwError "Declaration {declName} not found"
+  let some value := constInfo.value?
+    | return #[]
+
+  let mut values := #[value]
+  let mut pending := collectSameDeclInternalRefs declName value
+  let mut seenNames := #[]
+  while !pending.isEmpty do
+    match pending.back? with
+    | none => pure ()
+    | some helperName =>
+        pending := pending.pop
+        if !seenNames.contains helperName then
+          seenNames := seenNames.push helperName
+          match env.find? helperName with
+          | some helperInfo =>
+              if let some helperValue := helperInfo.value? then
+                values := values.push helperValue
+                for ref in collectSameDeclInternalRefs declName helperValue do
+                  if !seenNames.contains ref && !pending.contains ref then
+                    pending := pending.push ref
+          | none => pure ()
+
+  return values
+
 /-- Check if an expression is syntactically zero.
     Handles:
     - Direct `.lit (.natVal 0)`

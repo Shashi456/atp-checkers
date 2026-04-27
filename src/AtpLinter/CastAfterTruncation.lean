@@ -269,14 +269,14 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Only analyze value for non-Prop definitions (skip proof terms)
   -- Proof terms can be enormous and contain incidental operations
-  let valuePatterns ← match value? with
-    | some v =>
-      let isPropType ← isProp type
-      if !isPropType then
-        withLCtx emptyLCtx #[] (findCastTruncPatterns v)
-      else
-        pure #[]
-    | none => pure #[]
+  let mut valuePatterns := #[]
+  if value?.isSome then
+    let isPropType ← isProp type
+    if !isPropType then
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let patterns ← withLCtx emptyLCtx #[] (findCastTruncPatterns value)
+        for pattern in patterns do
+          valuePatterns := valuePatterns.push pattern
 
   let allPatterns := deduplicatePatterns (typePatterns ++ valuePatterns)
 

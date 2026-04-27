@@ -205,12 +205,13 @@ def analyzeDecl (declName : Name) : MetaM AnalysisResult := do
 
   -- Only analyze value for non-Prop definitions (skip proof terms)
   -- Proof terms can be enormous and contain incidental operations
-  if let some value := value? then
+  if value?.isSome then
     let isPropType ← isProp type
     if !isPropType then
-      let valueRanges ← findRanges value
-      for r in valueRanges do
-        allRanges := allRanges.push r
+      for value in (← declarationValuesForBodyAnalysis declName) do
+        let valueRanges ← findRanges value
+        for r in valueRanges do
+          allRanges := allRanges.push r
 
   -- Count 0-indexed ranges
   let zeroIndexed := allRanges.filter fun r =>
