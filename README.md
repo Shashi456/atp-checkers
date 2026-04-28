@@ -5,9 +5,9 @@ mathematics — code that compiles successfully but silently produces incorrect
 results. Built for evaluating LLM-generated Lean formalizations at scale.
 
 The linter uses **semantic guard checking**: rather than simple pattern matching,
-it attempts to prove (via `assumption` → `omega` → `grind`) that safety guards
-exist or that dangerous conditions hold, producing machine-verifiable confidence
-levels on every finding.
+it attempts to prove that safety guards exist, or that dangerous conditions
+hold, using local facts, structural/positivity recognizers, `omega`, and
+`grind`. Findings carry machine-verifiable confidence levels.
 
 Guard mining is polarity-aware. For example, in `x ≠ 0 ∧ 1 / x = x`, the left
 conjunct safely guards the right. But in `¬ (x ≠ 0 ∧ 1 / x = x)` or
@@ -60,15 +60,19 @@ JSONL file with one problem per line:
 ```
 
 **Required fields:**
-- `id` — unique problem identifier (string)
-- `lean_code` — Lean 4 code to analyze (string, without `import` or `#check_atp` — the runner adds these)
+- `lean_code` — Lean 4 code to analyze. Imports are allowed; do not include
+  `#check_atp`/`#check_atp_all` because the runner adds the linter command.
+
+**Recommended fields:**
+- `id` — unique problem identifier (string). If omitted, the loader generates
+  `row_<n>`.
 
 **Optional fields** (preserved in output under `metadata`):
 - `natural_language` — natural language statement
 - `source` — dataset/benchmark name
 - Any other fields (benchmark-specific tags, etc.)
 
-See `datasets/FORMATS.md` for planned format support.
+See `datasets/FORMATS.md` for supported external schemas.
 
 ## Runner CLI
 
@@ -96,6 +100,7 @@ python -m runner <dataset.jsonl> --workspace <path> --output <dir> [options]
 | `--append` | off | Append to existing `results.jsonl` instead of failing |
 | `--skip-existing` | off | Resume interrupted runs (skips already-processed problem IDs) |
 | `--toolchain` | auto | Lean toolchain string (auto-detected from workspace) |
+| `--allow-toolchain-mismatch` | off | Allow appending/resuming into an output file produced under a different Lean toolchain |
 
 The runner resolves the workspace Lean environment once and invokes the Lean
 binary directly per problem, with import-bundle caching to avoid repeated
@@ -131,6 +136,9 @@ Each line of `results.jsonl` is a JSON object:
 
 ```json
 {
+  "schema_version": 1,
+  "dataset": "my_benchmark",
+  "run_id": "out:2026-04-28T12:42:44.125493+00:00",
   "problem_id": "problem_1",
   "source": "my_benchmark",
   "status": "findings",
@@ -142,14 +150,15 @@ Each line of `results.jsonl` is a JSON object:
       "message": "a / b has no guard ensuring b ≠ 0",
       "suggestion": "Add hypothesis `h : b ≠ 0` or `h : b > 0`",
       "confidence": "proven",
-      "provedBy": "assumption"
+      "provedBy": "assumption",
+      "taxonomyCategory": "I.d - Lean Semantic Traps"
     }
   ],
   "error_message": null,
   "duration_ms": 1823,
   "provenance": {
-    "lean_toolchain": "leanprover/lean4:v4.28.0",
-    "timestamp": "2026-02-23T12:42:44.125493+00:00"
+    "lean_toolchain": "leanprover/lean4:v4.30.0-rc2",
+    "timestamp": "2026-04-28T12:42:44.125493+00:00"
   },
   "compile_error": false,
   "compile_error_message": null,
@@ -225,10 +234,10 @@ metadata, and structured findings that can be directly embedded in prompts.
 ```
 atp-checkers/
 ├── lakefile.lean              # Build config
-├── lean-toolchain             # Lean 4 v4.28.0 (source of truth)
+├── lean-toolchain             # Lean 4 v4.30.0-rc2 (source of truth)
 ├── Main.lean                  # CLI entry point
-├── src/AtpLinter/             # 13 checker modules + core infrastructure
-├── test/                      # 7 gating + 3 demo test suites
+├── src/AtpLinter/             # 13 checker categories + guard infrastructure
+├── test/                      # 8 gating suites, 4 demo suites, and test assertions
 ├── runner_tests/              # Python runner unit tests
 ├── runner/                    # Python JSONL batch runner
 ├── datasets/examples/         # Smoke test datasets
@@ -238,7 +247,7 @@ atp-checkers/
 
 ## Building from Source
 
-**Requirements:** Lean 4 v4.28.0 (pinned via `lean-toolchain`), Python ≥ 3.10.
+**Requirements:** Lean 4 v4.30.0-rc2 (pinned via `lean-toolchain`), Python ≥ 3.10.
 The Python runner uses only the stdlib — no `pip install` needed for pure
 linting; optional `ruff` for dev lint.
 
@@ -265,7 +274,7 @@ cd atp-checkers
 #    30+ minutes on first build; the fallback is building Mathlib locally)
 lake exe cache get || true
 
-# 4. Build the linter (2958 jobs including Mathlib — ~5 min with cache, ~30 min without)
+# 4. Build the linter and dependencies
 lake build
 
 # 5. Run gating tests (should all pass)
@@ -300,8 +309,8 @@ analysis can and cannot catch in Lean formalizations, including:
 
 ## CI
 
-GitHub Actions workflow at `.github/workflows/lean.yml` runs `lake build` and
-`lake build AtpLinterTest`, plus Python runner unit tests, on push.
+GitHub Actions workflow at `.github/workflows/lean.yml` runs `lake build`,
+`lake build AtpLinterTest`, Python runner unit tests, and Ruff on push.
 
 ## License
 

@@ -4,11 +4,14 @@ This directory documents dataset formats supported by the runner.
 
 ## Canonical Internal Contract
 
-Each JSONL row must provide:
+Each loaded problem is normalized to:
 - `id`
 - `lean_code`
+- `metadata`
 
-All other keys are preserved as metadata in output records.
+Canonical JSONL rows should provide `lean_code` and preferably `id`. If no
+recognized ID field is present, the loader generates `row_<n>` from the row
+index. All unconsumed keys are preserved as metadata in output records.
 
 ## Minimal Example
 
@@ -18,15 +21,17 @@ See `datasets/examples/minimal.jsonl`.
 
 The loader reports parse errors for:
 - invalid JSON
-- missing `id`
-- missing `lean_code`
-- non-string `lean_code`
+- non-object JSONL rows or JSON array items
+- missing recognized Lean code field
+- non-string or empty Lean code field
+- unreadable or empty `.lean` files
 
 Invalid rows are skipped by default and emitted as infra errors in results.
 
 ## Next Step
 
-As new external formats are integrated, add adapter notes and examples in `FORMATS.md`.
+When new external formats are integrated, add resolver notes and examples in
+`FORMATS.md`.
 
 ## Upstream Sources
 

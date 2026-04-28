@@ -6,7 +6,7 @@
 |--------|------|-------|
 | JSONL | `--format jsonl` (default) | One JSON object per line |
 | JSON array | `--format json` | File containing `[{...}, {...}]` |
-| Lean directory | `--format lean` | Directory of `.lean` files, one problem per file |
+| Lean directory | `--format lean` | Non-recursive directory of top-level `.lean` files, one problem per file |
 | HuggingFace | `--format hf` | Any HuggingFace dataset with recognized fields |
 
 ## Schema Auto-Detection
@@ -16,7 +16,8 @@ your dataset uses — it is detected automatically.
 
 ### ID field (first match)
 
-`id` → `name` → `theorem_name` → `problem_id` → auto-generated from row index
+`id` → `name` → `theorem_name` → `problem_id` → `uuid` → `theorem_names` →
+auto-generated from row index
 
 ### Code field (first match)
 
@@ -26,12 +27,17 @@ your dataset uses — it is detected automatically.
 | 2 | `lean4_code` | MOBench (pre-joined) |
 | 3 | `header` + `formal_statement` | DeepSeek-ProverBench, DeepSeek ProofNet, MOBench |
 | 4 | `lean4_src_header` + `lean4_formalization` | ProofNetSharp |
-| 5 | `formal_statement` (alone) | CombiBench, MiniF2F (HF) |
-| 6 | `formal` (alone) | justincasher miniF2F |
+| 5 | `autoformalization` | FormalMATH-style generated Lean |
+| 6 | `formal_statement` (alone) | CombiBench, MiniF2F (HF) |
+| 7 | `formal` (alone) | justincasher miniF2F |
 
 ### Natural language field (first match)
 
-`natural_language` → `nl_statement` → `informal_prefix` → `natural`
+`natural_language` → `nl_statement` → `informal_prefix` → `natural` →
+`refined_statement` → `problem`
+
+JSON and JSONL inputs are read with UTF-8 BOM tolerance. Invalid rows are
+represented as infra-error result rows rather than crashing the batch.
 
 ## `--header-file`
 
@@ -75,6 +81,9 @@ python -m runner PAug/ProofNetSharp --format hf --split test -w ./linter -o resu
 python -m runner test.jsonl -w ./linter -o results/ --header-file headers/mathlib.lean
 python -m runner hoskinson-center/proofnet --format hf --split test -w ./linter -o results/ --header-file headers/mathlib.lean
 ```
+
+Lean directory loading is intentionally non-recursive. Pass the directory that
+directly contains the `.lean` files you want to check.
 
 ## Design Rule
 

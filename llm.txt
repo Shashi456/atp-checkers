@@ -2,9 +2,25 @@
 
 Metaprogramming-based linter detecting "Lean Semantic Traps" — code that compiles
 but silently produces mathematically incorrect results. Uses **semantic guard
-checking** via `assumption` → `omega` → `grind` (SMT-style solver) tactics.
+checking** via local facts, structural/positivity recognizers, `omega`, and
+`grind` (SMT-style solver) tactics.
 
 Release identity: `atp-checkers`. Internal Lean namespace: `AtpLinter`.
+
+---
+
+## Branch Map
+
+`main` is the current authoritative development line. As of this document it is
+on Lean `v4.30.0-rc2` and includes the semantic-verifier upgrade, guard-module
+refactor, runner simplification, and recursive-helper analysis.
+
+Version-pinned branches for older Lean/Mathlib releases:
+- `lean-v4.24`: port pinned to Lean/Mathlib `v4.24.0`
+- `lean-v4.20`: port pinned to Lean/Mathlib `v4.20.0`
+
+Do not assume `origin/HEAD` identifies the branch you want; explicitly checkout
+`main` or the version branch under investigation.
 
 ---
 
@@ -13,14 +29,17 @@ Release identity: `atp-checkers`. Internal Lean namespace: `AtpLinter`.
 ```
 atp-checkers/
 ├── lakefile.lean              # Lake build config (package atp-checkers)
-├── lake-manifest.json         # Dependencies (mathlib v4.28.0, plausible v4.28.0)
-├── lean-toolchain             # leanprover/lean4:v4.28.0 (source of truth)
+├── lake-manifest.json         # Dependencies (mathlib v4.30.0-rc2, plausible v4.30.0-rc2)
+├── lean-toolchain             # leanprover/lean4:v4.30.0-rc2 (source of truth)
 ├── Main.lean                  # CLI entry point
 ├── src/
 │   ├── AtpLinter.lean         # Main module, #check_atp command, JSON pipeline
 │   └── AtpLinter/
 │       ├── Basic.lean         # Common types (ErrorCategory, Severity, Confidence)
-│       ├── SemanticGuards.lean # Guard/unsafety prover (assumption + omega + grind)
+│       ├── SemanticGuards.lean # Public facade for guard machinery
+│       ├── GuardPolicy.lean    # Binder-safe local-context construction
+│       ├── GuardFacts.lean     # Local/derived fact discovery
+│       ├── GuardProver.lean    # Guard/unsafety prover (local facts + omega + grind)
 │       ├── NatSubtraction.lean
 │       ├── DivisionByZero.lean
 │       ├── IntDivTruncation.lean
@@ -37,11 +56,10 @@ atp-checkers/
 ├── test/
 │   ├── AllTests.lean          # Hub: imports all gating test modules
 │   ├── TestAssertions.lean    # #cov_assert_* DSL (compile-time gating)
-│   └── ...                    # 7 gating + 4 demo test files
+│   └── ...                    # 8 gating roots + 4 demo roots
 ├── runner/                    # Python batch execution pipeline
 │   ├── __main__.py            # CLI entrypoint, orchestration, resume state
-│   ├── executor.py            # Default backend: subprocess per problem (direct lean)
-│   ├── persistent.py          # Alternative backend: persistent REPL worker pool
+│   ├── executor.py            # Subprocess runner (direct Lean invocation)
 │   ├── preamble.py            # Import-bundle construction + normalization for caching
 │   ├── data_loader.py         # Dataset loading (JSONL, JSON, lean dir, HuggingFace)
 │   └── models.py              # Data models (Problem, Finding, LintResult)
@@ -53,20 +71,67 @@ atp-checkers/
 ### Build & Test
 
 ```bash
-lake build                    # Build linter (~2958 jobs including Mathlib; ~5 min with cache)
+lake build                    # Build linter and dependencies
 lake build AtpLinterTest      # Run gating tests (compile-time #cov_assert_* assertions)
 lake build AtpLinterDemo      # Run demo tests (non-gating, diagnostic output)
 
-# Default: subprocess backend (resolves lean env once, direct invocation)
+# Subprocess execution (resolves lean env once, direct invocation)
 python3 -m runner datasets/examples/minimal_no_mathlib.jsonl \
   --workspace . --output out --timeout 60
 
 # Parallel execution
 python3 -m runner my_benchmark.jsonl -w . -o results -j 4
 
-# Persistent REPL backend (requires `lake build repl`)
-python3 -m runner my_benchmark.jsonl -w . -o results --backend persistent
 ```
+
+### Dataset Intake
+
+The runner accepts JSONL, JSON arrays, non-recursive Lean directories, and
+HuggingFace datasets:
+
+```bash
+# Canonical JSONL
+python3 -m runner dataset.jsonl -w . -o out --timeout 30 -j 8
+
+# JSON array
+python3 -m runner problems.json --format json -w . -o out
+
+# Directory containing top-level .lean files only (non-recursive)
+python3 -m runner ./lean-files --format lean -w . -o out
+
+# HuggingFace dataset
+python3 -m runner AI-MO/CombiBench --format hf --split test -w . -o out
+
+# Headerless theorem statements
+python3 -m runner dataset.jsonl -w . -o out --header-file headers/mathlib.lean
+```
+
+Canonical JSONL should be one object per line:
+
+```json
+{"id":"problem_1","lean_code":"import Mathlib\n\ntheorem foo : True := by trivial","natural_language":"optional statement"}
+```
+
+Only `lean_code` is required. `id` is recommended; if absent, the loader
+generates `row_<n>`. Imports are allowed in `lean_code`; do not include
+`#check_atp` or `#check_atp_all`, because the runner appends the linter command.
+
+The loader also recognizes common external schemas without pre-conversion:
+- ID keys: `id`, `name`, `theorem_name`, `problem_id`, `uuid`, `theorem_names`
+- Code keys: `lean_code`, `lean4_code`, `header` + `formal_statement`,
+  `lean4_src_header` + `lean4_formalization`, `autoformalization`,
+  `formal_statement`, `formal`
+- Natural-language keys: `natural_language`, `nl_statement`,
+  `informal_prefix`, `natural`, `refined_statement`, `problem`
+
+When converting a new dataset manually, prefer canonical JSONL with stable
+`id`, complete `lean_code`, and original natural-language/problem metadata
+preserved as extra fields. For theorem-statement-only datasets, either prepend a
+shared import/open header into each `lean_code` or pass `--header-file`.
+
+JSON and JSONL inputs tolerate a UTF-8 BOM. Invalid rows become infra-error
+result rows instead of crashing the whole batch. Duplicate problem IDs in one run
+are skipped after the first occurrence.
 
 ---
 
@@ -74,19 +139,19 @@ python3 -m runner my_benchmark.jsonl -w . -o results --backend persistent
 
 | Checker | File | Detects | Guard Method |
 |---------|------|---------|--------------|
-| Nat Subtraction | `NatSubtraction.lean` | `a - b` on Nat without `b ≤ a` | Semantic (omega → grind) |
-| Division by Zero | `DivisionByZero.lean` | `a / b` without `b ≠ 0` | Semantic (omega → grind) |
+| Nat Subtraction | `NatSubtraction.lean` | `a - b` on Nat without `b ≤ a` | Semantic prover |
+| Division by Zero | `DivisionByZero.lean` | `a / b` without `b ≠ 0` | Semantic prover |
 | Int Div Truncation | `IntDivTruncation.lean` | `1/4 = 0` truncation | Literal analysis |
 | Int.toNat | `IntToNat.lean` | `Int.toNat` without `x ≥ 0` | Semantic (omega) |
 | List.range | `ListRange.lean` | 0-indexed ranges | Flagged for review |
 | Modulo by Zero | `ModuloByZero.lean` | `a % b` without `b ≠ 0` | Semantic (omega) |
 | Axiom | `AxiomChecker.lean` | User `axiom` asserting Prop | Declaration type |
-| Vacuous Hyps | `VacuousCheck.lean` | Contradictory hyps / empty domains | Prove `False` (omega → grind) |
+| Vacuous Hyps | `VacuousCheck.lean` | Contradictory hyps / empty domains | Semantic prover for `False` |
 | Unused Binder | `UnusedBinder.lean` | `∀ x, ...` where `x` unused | `hasLooseBVar` |
 | Counterexample | `Counterexample.lean` | Concrete counterexamples | `decide` + enumeration |
 | Cast After Trunc | `CastAfterTruncation.lean` | Cast applied after truncating op | Pattern matching |
 | Exponent Trunc | `ExponentTruncation.lean` | Negative/zero exponent issues | Guard + literal analysis |
-| Analytic Domain | `AnalyticDomain.lean` | `x⁻¹`/sqrt/log without domain guard | Semantic (assumption → grind) |
+| Analytic Domain | `AnalyticDomain.lean` | `x⁻¹`/sqrt/log without domain guard | Semantic prover |
 
 ---
 
@@ -122,7 +187,8 @@ structure LintFinding where
 
 ### Unsafety Proving
 
-When safety guard fails, checkers attempt to prove the **dangerous condition** via `tryProveUnsafety?` (same prover stack: assumption → omega → grind):
+When safety guard fails, checkers attempt to prove the **dangerous condition**
+via `tryProveUnsafety?` using the same local-fact/prover stack:
 
 | Checker | Unsafety goal |
 |---------|--------------|
@@ -144,15 +210,24 @@ Python `Finding` maps `provedBy` (camelCase) → `proved_by` (snake_case).
 
 ---
 
-## Core Module: SemanticGuards.lean
+## Guard Modules
 
-Layered fallback prover: `assumption` → `omega` → `grind`.
+The public import boundary is `SemanticGuards.lean`, but it is intentionally a
+small facade. The implementation is split by concern:
+
+- `GuardPolicy.lean`: safe local-context construction for binder-sensitive checks
+- `GuardFacts.lean`: local propositions, derived structure-field facts, conjunction
+  expansion, bounded forall instantiation, and standard magnitude facts
+- `GuardProver.lean`: solver order and checker-facing guard queries
+
+Layered fallback prover: `assumption`/exact local fact → positivity/structure →
+`omega` → `grind`.
 
 ### Key Types
 
 ```lean
 inductive ProvedBy where
-  | assumption | simp | byContra | omega | positivity | grind
+  | assumption | structural | simp | byContra | omega | positivity | grind
 
 structure LocalCtxSnapshot where
   lctx : LocalContext
@@ -164,7 +239,8 @@ structure LocalCtxSnapshot where
 ```lean
 def tryProve? (goal : Expr) (useOmega := true) (useGrind := false) : MetaM (Option ProvedBy)
 def tryProveVacuity? (goal : Expr) : MetaM (Option ProvedBy)
-def tryProveUnsafety? (goal : Expr) (snap : LocalCtxSnapshot) : MetaM (Option ProvedBy)
+def tryProveUnsafety? (goal : Expr) (snap : LocalCtxSnapshot)
+  (useOmega := true) (useGrind := true) : MetaM (Option ProvedBy)
 def proveDivisorSafe? (d : Expr) : MetaM (Option ProvedBy)
 def proveNatSubGuard? (a b : Expr) : MetaM (Option ProvedBy)
 def proveIntNonneg? (intExpr : Expr) : MetaM (Option ProvedBy)
@@ -174,10 +250,10 @@ def proveIntNonneg? (intExpr : Expr) : MetaM (Option ProvedBy)
 
 | Domain | Chain | Rationale |
 |--------|-------|-----------|
-| Nat/Int guards | assumption → omega → grind(guard) | omega handles most |
-| Real/field guards | assumption → grind(guard, omega off) | omega can't reason about Real |
+| Nat/Int guards | assumption/local facts → positivity/structure → omega → optional grind | omega handles most |
+| Real/field guards | assumption/local facts → positivity/structure → optional grind | omega can't reason about Real |
 | Vacuity (prove False) | assumption → omega → grind(vacuity) | Maximum power |
-| Unsafety proofs | assumption → omega → grind(guard) | Same stack as guards |
+| Unsafety proofs | assumption → omega → grind(guard) | Same stack as guards, grind enabled by default |
 
 Two grind configs with strict caps: `grindConfigGuard` (tight) and `grindConfigVacuity` (generous).
 
@@ -185,20 +261,19 @@ Two grind configs with strict caps: `grindConfigGuard` (tight) and `grindConfigV
 
 ## Implementation Patterns
 
-### Prefix-Context Traversal
+### Binder-Safe Context Policy
 
-All checkers use single-binder recursion for soundness — visit binder type BEFORE introducing later binders:
+For theorem bodies and conclusions, guard-checking checkers open the full binder
+telescope first, so independent hypotheses are available regardless of binder
+order.
 
-```lean
-| .forallE n ty body bi =>
-    results := results ++ (← findXxx ty lctx)       -- current context only
-    let bodyResults ← withLocalDecl n bi ty fun fvar => do
-      let lctx' ← getLCtx
-      findXxx (body.instantiate1 fvar) lctx'
-    results := results ++ bodyResults
-```
-
-Why: In `∀ (x : Fin (a / b)) (hb : b ≠ 0), True`, `hb` must NOT be in scope when checking `x`'s type.
+For binder types, the checker deliberately does not use the raw full local
+context. Full context can be circular: checking `x : Fin (n - k)` while using
+the later local `x` exposes `x.isLt : x.val < n - k`, which can prove the guard
+only because the potentially unsafe type was already accepted. The guard policy
+therefore uses a conservative "prop-full, data-prefix" context for binder types:
+earlier data binders are kept, later/current data binders are dropped, and later
+propositional binders are kept only when they do not depend on dropped data.
 
 ### Pre-computed Strings
 
@@ -210,7 +285,7 @@ Only analyze type signatures for Prop declarations. Proof terms are enormous and
 
 ### Polarity-Aware Guard Mining
 
-Positive conjuncts like `x ≠ 0 ∧ 1/x = x` contribute `x ≠ 0` to the guard context. Under negation or in an implication antecedent (`¬ (x ≠ 0 ∧ …)`, `(x ≠ 0 ∧ …) → True`) the same conjunct is **not** mined, so guard warnings still fire. `withExpandedAndHyps` in `SemanticGuards.lean` handles this by walking only asserted prop hypotheses. See `test/GuardProvingTests.lean` → `negatedConjunctionDiv`, `antecedentConjunctionDiv`, `negatedConjunctionInv` for the gating tests.
+Positive conjuncts like `x ≠ 0 ∧ 1/x = x` contribute `x ≠ 0` to the guard context. Under negation or in an implication antecedent (`¬ (x ≠ 0 ∧ …)`, `(x ≠ 0 ∧ …) → True`) the same conjunct is **not** mined, so guard warnings still fire. `withExpandedAndHyps` in `GuardFacts.lean` handles this by walking only asserted prop hypotheses. See `test/GuardProvingTests.lean` → `negatedConjunctionDiv`, `antecedentConjunctionDiv`, `negatedConjunctionInv` for the gating tests.
 
 ### Deduplication
 
@@ -225,29 +300,31 @@ Key per checker: `(operandStr1, operandStr2, guardEvidence.isSome)` — varies s
 
 ## Runner Pipeline
 
-Two execution backends:
+The runner uses subprocess execution: it resolves the workspace Lean environment
+once, invokes Lean directly per problem, and uses import-bundle caching to avoid
+re-elaborating shared imports. It supports extra Lean search paths via the
+`ATP_EXTRA_LEAN_PATHS` environment variable or per-problem
+`metadata.extra_lean_paths`.
 
-- **subprocess** (default): resolves `lake env` once, invokes Lean directly per problem
-  with import-bundle caching. Supports extra Lean search paths via `ATP_EXTRA_LEAN_PATHS`
-  env var or per-problem `metadata.extra_lean_paths`.
-- **persistent**: keeps Lean REPL processes alive, caches import environments.
-  ~22s startup, then ~1-3s per problem. Requires `lake build repl`.
-
-Both backends wrap each problem's `lean_code` with `import AtpLinter` + `#check_atp_all`
-and parse `ATP_LINT:` / `ATP_DONE:` sentinels from output.
+The runner wraps each problem's `lean_code` with `import AtpLinter` +
+`#check_atp_all` and parses `ATP_LINT:` / `ATP_DONE:` sentinels from output.
 
 **Output schema** (`results.jsonl`):
 ```json
 {
+  "schema_version": 1,
+  "dataset": "...",
+  "run_id": "...",
   "problem_id": "...",
   "source": "...",
   "status": "ok|findings|compile_error|timeout|infra_error",
   "findings": [{"category":"...","severity":"WARNING","declaration":"...",
                 "message":"...","suggestion":"...",
-                "confidence":"proven","provedBy":"omega"}],
+                "confidence":"proven","provedBy":"omega",
+                "taxonomyCategory":"I.d - Lean Semantic Traps"}],
   "error_message": null,
   "duration_ms": 1234,
-  "provenance": {"lean_toolchain":"leanprover/lean4:v4.28.0","timestamp":"..."},
+  "provenance": {"lean_toolchain":"leanprover/lean4:v4.30.0-rc2","timestamp":"..."},
   "compile_error": false,
   "compile_error_message": null,
   "metadata": {"natural_language":"...", "...":"..."}
